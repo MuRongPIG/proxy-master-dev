@@ -1,0 +1,22 @@
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: worker_node/Dockerfile
+    container_name: proxy-worker
+    restart: unless-stopped
+    environment:
+      MASTER_URL: ${MASTER_URL:-http://host.docker.internal:62071}
+      NODE_TOKEN_FILE: /data/node_token.txt
+      NODE_TOKEN_FILE_WAIT_SECONDS: 30
+      WORKER_ID: worker
+      WORKER_COUNT: 4
+      INTERVAL: 2
+      TIMEOUT: 8
+      HEARTBEAT_INTERVAL: 15
+      TARGET_URL: https://httpbin.org/ip
+      LOG_DIR: /data/logs/worker
+      LOG_LEVEL: INFO
+      LOG_RETENTION_DAYS: 14
+    volumes:
+      - ./data:/data

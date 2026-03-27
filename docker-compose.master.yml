@@ -1,0 +1,26 @@
+services:
+  master:
+    build:
+      context: .
+      dockerfile: master_server/Dockerfile
+    container_name: proxy-master
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 62071
+      DB_PATH: /data/proxy_checker.db
+      BOOTSTRAP_PROXY_URL_FILE: master_server/bootstrap_proxy_urls.txt
+      URL_REFRESH_INTERVAL_SECONDS: 300
+      BOOTSTRAP_MAX_RETRIES: 2
+      POOL_EXPORT_DIR: /data/pool_exports
+      POOL_EXPORT_INTERVAL_SECONDS: 300
+      EXCELLENT_SUCCESS_RATE: 0.8
+      EXCELLENT_MIN_CHECKS: 3
+      LOG_DIR: /data/logs/master
+      LOG_LEVEL: INFO
+      LOG_RETENTION_DAYS: 14
+      UI_CORS_ORIGINS: "*"
+    ports:
+      - "62071:62071"
+    volumes:
+      - ./data:/data
