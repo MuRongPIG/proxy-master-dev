@@ -62,6 +62,9 @@ createApp({
       taskHasMore: false,
       logs: [],
       autoTimer: null,
+      ws: null,
+      wsConnected: false,
+      wsReconnectTimer: null,
       tierChart: null,
       taskChart: null,
       protocolChart: null,
@@ -163,6 +166,20 @@ createApp({
       });
       return url.toString();
     },
+    buildWsUrl(path, query) {
+      const base = this.cfg.baseUrl.replace(/\/$/, "");
+      const wsBase = base.startsWith("https://")
+        ? base.replace(/^https:\/\//, "wss://")
+        : base.replace(/^http:\/\//, "ws://");
+      const url = new URL(wsBase + path);
+      Object.entries(query || {}).forEach(([k, v]) => {
+        if (v === undefined || v === null || v === "") {
+          return;
+        }
+        url.searchParams.set(k, String(v));
+      });
+      return url.toString();
+    },
     async api(method, path, { query = null, body = null, auth = false, formData = null } = {}) {
       const headers = {};
       if (auth) {
@@ -199,12 +216,85 @@ createApp({
       localStorage.setItem("master_ui_refresh_seconds", String(this.cfg.refreshSeconds));
       this.log("配置已保存", this.cfg);
       this.restartTimer();
+      this.connectWebSocket();
     },
     restartTimer() {
       if (this.autoTimer) {
         clearInterval(this.autoTimer);
       }
       this.autoTimer = setInterval(() => this.refreshAll(), Math.max(5, this.cfg.refreshSeconds) * 1000);
+    },
+    disconnectWebSocket() {
+      if (this.wsReconnectTimer) {
+        clearTimeout(this.wsReconnectTimer);
+        this.wsReconnectTimer = null;
+      }
+      if (this.ws) {
+        this.ws.close();
+        this.ws = null;
+      }
+      this.wsConnected = false;
+    },
+    connectWebSocket() {
+      this.disconnectWebSocket();
+      try {
+        const wsUrl = this.buildWsUrl("/ws/dashboard", { token: this.cfg.nodeToken || "" });
+        const socket = new WebSocket(wsUrl);
+        this.ws = socket;
+
+        socket.onopen = () => {
+          this.wsConnected = true;
+          this.log("WebSocket 已连接", { url: wsUrl });
+        };
+
+        socket.onmessage = async (event) => {
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data || "{}");
+          } catch (_e) {
+            return;
+          }
+
+          if (!payload || payload.type !== "snapshot") {
+            return;
+          }
+
+          if (payload.stats) {
+            this.stats = payload.stats;
+          }
+          if (Array.isArray(payload.nodes)) {
+            this.nodes = payload.nodes;
+          }
+          if (payload.alive_protocol_distribution) {
+            this.analytics.aliveProtocolDistribution = payload.alive_protocol_distribution;
+          }
+
+          if (this.activeTab === "proxies") {
+            await this.loadProxies();
+          }
+          if (this.activeTab === "tasks") {
+            await this.loadTasks();
+          }
+          if (this.activeTab === "overview") {
+            await this.loadAnalytics();
+          }
+
+          await nextTick();
+          this.renderCharts();
+        };
+
+        socket.onclose = () => {
+          this.wsConnected = false;
+          this.ws = null;
+          this.wsReconnectTimer = setTimeout(() => this.connectWebSocket(), 3000);
+        };
+
+        socket.onerror = () => {
+          this.wsConnected = false;
+        };
+      } catch (err) {
+        this.log("WebSocket 连接失败", { error: String(err) });
+      }
     },
     async loadHealth() {
       try {
@@ -483,6 +573,7 @@ createApp({
   },
   async mounted() {
     this.restartTimer();
+    this.connectWebSocket();
     await this.refreshAll();
     window.addEventListener("resize", () => {
       if (this.tierChart) {
@@ -497,6 +588,7 @@ createApp({
     });
   },
   beforeUnmount() {
+    this.disconnectWebSocket();
     if (this.autoTimer) {
       clearInterval(this.autoTimer);
     }

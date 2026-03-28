@@ -43,6 +43,9 @@
             <label>节点令牌
               <input v-model="cfg.nodeToken" type="password" placeholder="X-Node-Token" />
             </label>
+            <label>实时通道
+              <input :value="wsConnected ? 'WebSocket 已连接' : 'WebSocket 重连中'" type="text" readonly />
+            </label>
             <label>自动刷新(s)
               <input v-model.number="cfg.refreshSeconds" type="number" min="5" />
             </label>

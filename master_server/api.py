@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import requests
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from master_server import database
@@ -167,6 +167,14 @@ def _pool_export_interval_seconds() -> int:
         return 300
 
 
+def _ws_push_interval_seconds() -> float:
+    raw = os.getenv("MASTER_WS_PUSH_INTERVAL_SECONDS", "2")
+    try:
+        return max(0.5, float(raw))
+    except ValueError:
+        return 2.0
+
+
 def _pool_export_dir() -> str:
     export_dir = os.getenv("MASTER_POOL_EXPORT_DIR", "").strip()
     if export_dir:
@@ -277,48 +285,42 @@ def on_startup() -> None:
     database.reset_detection_flow()
     _export_pool_once()
     _start_background_tasks()
-    dispatch_sec = _dispatch_interval_seconds()
-    logger.info("master 启动完成，自动分发间隔 %d 秒，任务将每 %d 秒自动分配一次", dispatch_sec, dispatch_sec)
+    logger.info("master 启动完成，调度模式：当前批次任务完成时自动分配下一批")
 
 
 def _background_task_loop() -> None:
-    """后台循环：新流程（首轮全量 -> 二轮 bad/good -> 黑名单 -> excellent/good 巡检）。"""
+    """后台循环：智能触发分发 - 当前批任务完成时自动分配下一批。"""
     last_url_refresh = 0.0
-    last_dispatch = 0.0
     last_pool_export = 0.0
     url_refresh_interval = _url_refresh_interval_seconds()
-    dispatch_interval = _dispatch_interval_seconds()
-    refresh_stagger = _url_refresh_stagger_seconds(dispatch_interval)
+    refresh_stagger = _url_refresh_stagger_seconds(7200)  # 用于计算错峰，实际值无关紧要
     pool_export_interval = _pool_export_interval_seconds()
 
-    # 启动后将 URL 刷新与分发巡检错峰执行，避免瞬时压力叠加。
     start_ts = time.time()
-    last_dispatch = start_ts - dispatch_interval
     last_url_refresh = start_ts - url_refresh_interval + refresh_stagger
     last_pool_export = start_ts - pool_export_interval
 
     logger.info(
-        "后台调度循环已启动: dispatch_interval=%d秒, url_refresh_interval=%d秒, stagger=%d秒, pool_export_interval=%d秒",
-        dispatch_interval,
+        "后台调度循环已启动（智能触发模式）: url_refresh_interval=%d秒, pool_export_interval=%d秒",
         url_refresh_interval,
-        refresh_stagger,
         pool_export_interval,
     )
 
     while True:
         try:
-            time.sleep(5)
+            time.sleep(2)  # 轮询间隔 2 秒，更快响应任务完成
             now = time.time()
+            
             if now - last_url_refresh >= url_refresh_interval:
                 _refresh_proxy_urls_once()
                 last_url_refresh = now
-            if now - last_dispatch >= dispatch_interval:
-                database.reclaim_stale_assigned_tasks(timeout_seconds=120)
-                database.distribute_detection_tasks()
-                last_dispatch = now
+            
             if now - last_pool_export >= pool_export_interval:
                 _export_pool_once()
                 last_pool_export = now
+            
+            database.reclaim_stale_assigned_tasks(timeout_seconds=120)
+            database.distribute_detection_tasks()
         except Exception:
             logger.exception("后台任务循环出现异常")
 
@@ -333,6 +335,33 @@ def _start_background_tasks() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.websocket("/ws/dashboard")
+async def ws_dashboard(websocket: WebSocket) -> None:
+    token = websocket.query_params.get("token", "").strip()
+    expected = _expected_token()
+    if token and token != expected:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    push_interval = _ws_push_interval_seconds()
+    heartbeat_timeout = 60
+
+    try:
+        while True:
+            snapshot = {
+                "type": "snapshot",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "stats": database.stats(),
+                "nodes": database.list_active_nodes(heartbeat_timeout_sec=heartbeat_timeout),
+                "alive_protocol_distribution": database.alive_protocol_distribution(),
+            }
+            await websocket.send_json(snapshot)
+            await asyncio.sleep(push_interval)
+    except WebSocketDisconnect:
+        return
 
 
 @app.post("/nodes/register", dependencies=[Depends(verify_node_token)])

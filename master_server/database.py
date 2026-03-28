@@ -857,11 +857,39 @@ def _delete_proxies_by_ids(conn: sqlite3.Connection, proxy_ids: list[int]) -> in
     return deleted
 
 
+def _should_dispatch_now(conn: sqlite3.Connection, phase: str) -> bool:
+    """仅在当前阶段无 pending/assigned 任务时触发下一轮分发。"""
+    stage_map = {
+        "primary": "primary",
+        "secondary_bad": "secondary_bad",
+        "secondary_good": "secondary_good",
+        "monitor": "monitor",
+    }
+    stage = stage_map.get(phase)
+    if not stage:
+        return True
+
+    pending = conn.execute(
+        "SELECT COUNT(1) AS c FROM tasks WHERE detect_stage = ? AND status IN ('pending', 'assigned')",
+        (stage,),
+    ).fetchone()["c"]
+    return int(pending or 0) == 0
+
+
 def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
     """新版流程：首轮全量 -> 二轮 bad/good -> black list -> excellent/good 周期巡检。"""
     active_nodes = list_active_nodes()
     if len(active_nodes) < 3:
         return
+
+    conn = _get_conn()
+    try:
+        with _DB_LOCK:
+            phase = _state_get(conn, "scan_phase", "primary")
+            if not _should_dispatch_now(conn, phase):
+                return
+    finally:
+        conn.close()
 
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
