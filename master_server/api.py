@@ -139,29 +139,32 @@ def _url_refresh_interval_seconds() -> int:
         return 300
 
 
+def _dispatch_interval_seconds() -> int:
+    raw = os.getenv("MASTER_DISPATCH_INTERVAL_SECONDS", "7200")
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 7200
+
+
+def _url_refresh_stagger_seconds(dispatch_interval: int) -> int:
+    raw = os.getenv("MASTER_URL_REFRESH_STAGGER_SECONDS", "")
+    if raw.strip():
+        try:
+            value = int(raw)
+        except ValueError:
+            value = dispatch_interval // 2
+    else:
+        value = dispatch_interval // 2
+    return max(0, value)
+
+
 def _pool_export_interval_seconds() -> int:
     raw = os.getenv("MASTER_POOL_EXPORT_INTERVAL_SECONDS", "300")
     try:
         return max(30, int(raw))
     except ValueError:
         return 300
-
-
-def _task_retention_days() -> int:
-    raw = os.getenv("MASTER_TASK_RETENTION_DAYS", "14")
-    try:
-        value = int(raw)
-    except ValueError:
-        return 14
-    return max(0, min(3650, value))
-
-
-def _task_cleanup_interval_seconds() -> int:
-    raw = os.getenv("MASTER_TASK_CLEANUP_INTERVAL_SECONDS", "600")
-    try:
-        return max(30, int(raw))
-    except ValueError:
-        return 600
 
 
 def _pool_export_dir() -> str:
@@ -270,40 +273,40 @@ def verify_node_token(x_node_token: str = Header(default="")) -> None:
 def on_startup() -> None:
     logger.info("master 启动中")
     database.init_db()
-    database.reclaim_stale_assigned_tasks(timeout_seconds=120)
     _bootstrap_import_once()
+    database.reset_detection_flow()
     _export_pool_once()
     _start_background_tasks()
     logger.info("master 启动完成")
 
 
 def _background_task_loop() -> None:
-    """后台循环：定时执行任务分配、代理池评级、过期代理清理。"""
+    """后台循环：新流程（首轮全量 -> 二轮 bad/good -> 黑名单 -> excellent/good 巡检）。"""
     last_url_refresh = 0.0
+    last_dispatch = 0.0
     last_pool_export = 0.0
-    last_task_cleanup = 0.0
     url_refresh_interval = _url_refresh_interval_seconds()
+    dispatch_interval = _dispatch_interval_seconds()
+    refresh_stagger = _url_refresh_stagger_seconds(dispatch_interval)
     pool_export_interval = _pool_export_interval_seconds()
-    task_cleanup_interval = _task_cleanup_interval_seconds()
-    task_retention_days = _task_retention_days()
+
+    # 启动后将 URL 刷新与分发巡检错峰执行，避免瞬时压力叠加。
+    start_ts = time.time()
+    last_dispatch = start_ts - dispatch_interval
+    last_url_refresh = start_ts - url_refresh_interval + refresh_stagger
+    last_pool_export = start_ts - pool_export_interval
+
     while True:
         try:
-            time.sleep(30)  # 每 30 秒执行一次
+            time.sleep(5)
             now = time.time()
             if now - last_url_refresh >= url_refresh_interval:
                 _refresh_proxy_urls_once()
                 last_url_refresh = now
-            database.reclaim_stale_assigned_tasks(timeout_seconds=120)
-            database.distribute_detection_tasks()
-            database.calculate_proxy_pool_tiers()
-            database.cleanup_dead_proxies(days_inactive=1)
-            database.cleanup_failed_proxies(fail_threshold=5)
-            database.deduplicate_proxy_pool()
-            if task_retention_days > 0 and now - last_task_cleanup >= task_cleanup_interval:
-                deleted_tasks = database.cleanup_finished_tasks(retention_days=task_retention_days)
-                if deleted_tasks > 0:
-                    logger.info("已清理过期历史任务: %s 条", deleted_tasks)
-                last_task_cleanup = now
+            if now - last_dispatch >= dispatch_interval:
+                database.reclaim_stale_assigned_tasks(timeout_seconds=120)
+                database.distribute_detection_tasks()
+                last_dispatch = now
             if now - last_pool_export >= pool_export_interval:
                 _export_pool_once()
                 last_pool_export = now
@@ -412,10 +415,11 @@ async def import_proxies_from_file(
 def get_proxies(
     status: str | None = Query(default=None),
     pool_tier: str | None = Query(default=None),
+    protocol: str | None = Query(default=None),
     limit: int = Query(default=100, ge=0, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[ProxyView]:
-    rows = database.list_proxies(status=status, pool_tier=pool_tier, limit=limit, offset=offset)
+    rows = database.list_proxies(status=status, pool_tier=pool_tier, protocol=protocol, limit=limit, offset=offset)
     return [ProxyView(**row) for row in rows]
 
 
@@ -444,24 +448,6 @@ def get_alive_protocol_distribution() -> AliveProtocolDistributionResponse:
     payload = database.alive_protocol_distribution()
     distribution = [ProtocolDistributionItem(**item) for item in payload.get("distribution", [])]
     return AliveProtocolDistributionResponse(total_alive=int(payload.get("total_alive", 0)), distribution=distribution)
-
-
-@app.post("/pool/recalculate")
-def recalculate_pool_tiers() -> dict[str, str]:
-    database.calculate_proxy_pool_tiers()
-    return {"status": "ok"}
-
-
-@app.post("/pool/cleanup")
-def cleanup_dead_proxies(days: int = Query(default=1, ge=1)) -> dict[str, int]:
-    deleted = database.cleanup_dead_proxies(days_inactive=days)
-    return {"deleted": deleted}
-
-
-@app.post("/pool/cleanup-failed")
-def cleanup_failed_proxies(fail_threshold: int = Query(default=5, ge=1)) -> dict[str, int]:
-    deleted = database.cleanup_failed_proxies(fail_threshold=fail_threshold)
-    return {"deleted": deleted}
 
 
 @app.post("/distribution/dispatch")

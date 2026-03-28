@@ -274,17 +274,6 @@
               <h3>维护动作</h3>
               <div class="inline-controls wrap">
                 <button @click="dispatch">分发任务</button>
-                <button @click="recalc">重算池分层</button>
-                <button @click="cleanupDead">清理死代理</button>
-                <button @click="cleanupFailed">清理失败代理</button>
-              </div>
-              <div class="row-fields">
-                <label>dead days
-                  <input v-model.number="ops.cleanupDeadDays" type="number" min="1" />
-                </label>
-                <label>fail threshold
-                  <input v-model.number="ops.cleanupFailThreshold" type="number" min="1" />
-                </label>
               </div>
             </article>
           </div>

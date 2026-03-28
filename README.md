@@ -17,13 +17,13 @@ This project uses a master-worker architecture for large-scale proxy validation.
   - Background schedulers continuously distribute tasks to online nodes.
   - Each proxy can be checked by multiple nodes.
 - Tiered proxy pools:
-  - `excellent`: success rate in the last 7 days reaches threshold (default `>= 80%`) and at least 3 checks.
-  - `good`: has successful checks but does not meet `excellent` threshold.
-  - `bad`: all checks failed.
-- Dynamic lifecycle management:
-  - Cleans up proxies unavailable for a long time (1 day+).
-  - Recomputes pool tiers periodically.
-  - Removes proxies that reach failure thresholds.
+  - `excellent`: all 3 node checks in the batch succeed.
+  - `good`: 1 or 2 node checks in the batch succeed.
+  - `bad`: all 3 node checks in the batch fail.
+- Two-pass + blacklist flow:
+  - First pass traverses the full queue from head to tail.
+  - Second pass checks `bad` first, then `good`.
+  - Proxies still `bad` after second pass are moved into blacklist and removed from the main pool.
 - Multi-source imports:
   - JSON payload, single URL, multiple URLs (concurrent), and file upload.
 - Startup bootstrap import:
@@ -116,7 +116,7 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 ## Run Master Server (Python)
 
 ```bash
-NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
 Master reads token from environment variable `NODE_TOKEN`.
@@ -129,10 +129,6 @@ Important options:
 - `--bootstrap-max-retries`: max retries while creating bootstrap tasks.
 - `--pool-export-dir`: output directory for exported proxy pool files.
 - `--pool-export-interval-seconds`: export interval, default `300`, minimum `30`.
-- `--excellent-success-rate`: success threshold for `excellent`, default `0.8` (range `0.5` to `1.0`).
-- `--excellent-min-checks`: min checks for `excellent`, default `3` (range `1` to `20`).
-- `--task-retention-days`: retention days for terminal tasks (`done/failed`), default `14`; `0` disables cleanup.
-- `--task-cleanup-interval-seconds`: cleanup interval for terminal tasks, default `600`, minimum `30`.
 - `--log-dir`: log directory.
 - `--log-level`: log level, default `INFO`.
 - `--log-retention-days`: log retention days, default `14`.
@@ -145,13 +141,12 @@ Auto filters for startup and periodic refresh:
 - For GitHub sources, skip repositories with `pushed_at` older than 7 days.
 - For raw `ip:port` entries, protocol is inferred from source URL/file name when possible (`socks4`, `socks5`, `http`, `https`); otherwise all protocol variants are generated.
 
-Background jobs (every 30 seconds):
-- Dispatch proxy check tasks to online nodes.
-- Recompute proxy pool tiers.
-- Clean long-term unavailable proxies.
+Background jobs (every 7200 seconds):
+- Dispatch tasks using two-pass flow (primary full traversal, then secondary bad/good).
+- Add second-pass bad proxies into blacklist and reject future imports from URL/file feeds.
+- Periodically monitor only `excellent` and `good` pools.
 - Refresh URLs at configured intervals.
 - Run global deduplication and merge duplicates.
-- Clean old terminal tasks (`done/failed`) by retention policy.
 - Export alive proxies (`status=alive`) by protocol under output directories.
 
 ## Run Worker Node (Python)
@@ -167,9 +162,7 @@ Optional logging options:
 - `--log-level`: log level, default `INFO`
 - `--log-retention-days`: log retention days, default `14`
 
-If `--node-token` is omitted, worker tries in order:
-- environment variable `NODE_TOKEN`
-- file path in `NODE_TOKEN_FILE` (wait duration controlled by `NODE_TOKEN_FILE_WAIT_SECONDS`, default 30 seconds)
+Worker reads token from environment variable `NODE_TOKEN`.
 
 Notes:
 - Default `worker_count` is 4, starting concurrent workers from `worker-1` to `worker-4`.
@@ -180,7 +173,7 @@ Notes:
 ## Unified Entry Point (Optional)
 
 ```bash
-NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 
 python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```

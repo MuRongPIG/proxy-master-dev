@@ -73,58 +73,22 @@ def _db_path() -> str:
     return os.getenv("MASTER_DB_PATH", "proxy_checker.db")
 
 
-def _excellent_success_rate_threshold() -> float:
-    raw = os.getenv("MASTER_EXCELLENT_SUCCESS_RATE", "0.8")
-    try:
-        value = float(raw)
-    except ValueError:
-        return 0.8
-    return min(1.0, max(0.5, value))
-
-
-def _excellent_min_checks() -> int:
-    raw = os.getenv("MASTER_EXCELLENT_MIN_CHECKS", "3")
+def _monitor_interval_seconds() -> int:
+    raw = os.getenv("MASTER_MONITOR_INTERVAL_SECONDS", "900")
     try:
         value = int(raw)
     except ValueError:
-        return 3
-    return max(1, min(20, value))
+        return 900
+    return max(60, value)
 
 
-def _pending_task_cap() -> int:
-    raw = os.getenv("MASTER_PENDING_TASK_CAP", "5000")
+def _dispatch_batch_cap() -> int:
+    raw = os.getenv("MASTER_DISPATCH_BATCH_CAP", "120")
     try:
         value = int(raw)
     except ValueError:
-        return 5000
-    return max(100, value)
-
-
-def _new_tasks_per_cycle_cap() -> int:
-    raw = os.getenv("MASTER_NEW_TASKS_PER_CYCLE_CAP", "600")
-    try:
-        value = int(raw)
-    except ValueError:
-        return 600
-    return max(30, value)
-
-
-def _pending_rebalance_batch_size() -> int:
-    raw = os.getenv("MASTER_PENDING_REBALANCE_BATCH_SIZE", "1200")
-    try:
-        value = int(raw)
-    except ValueError:
-        return 1200
-    return max(100, value)
-
-
-def _finished_task_cleanup_batch_size() -> int:
-    raw = os.getenv("MASTER_FINISHED_TASK_CLEANUP_BATCH_SIZE", "10000")
-    try:
-        value = int(raw)
-    except ValueError:
-        return 10000
-    return max(200, value)
+        return 120
+    return max(5, value)
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -210,6 +174,17 @@ def init_db() -> None:
                 UNIQUE(country_code, sequence)
             );
 
+            CREATE TABLE IF NOT EXISTS proxy_blacklist (
+                proxy_url TEXT PRIMARY KEY,
+                reason TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS scheduler_state (
+                state_key TEXT PRIMARY KEY,
+                state_value TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_tasks_status_id ON tasks(status, id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status_finished_at ON tasks(status, finished_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_proxy_id ON tasks(proxy_id);
@@ -224,10 +199,92 @@ def init_db() -> None:
         _ensure_column(conn, "tasks", "task_uuid", "TEXT")
         _ensure_column(conn, "proxies", "pool_tier", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "proxies", "country_code", "TEXT")
+        _ensure_column(conn, "proxies", "queue_order", "INTEGER")
+        _ensure_column(conn, "proxies", "flow_phase", "TEXT NOT NULL DEFAULT 'primary_pending'")
         _ensure_column(conn, "check_results", "country_code", "TEXT")
+        _ensure_column(conn, "tasks", "detect_stage", "TEXT NOT NULL DEFAULT 'primary'")
+        _ensure_column(conn, "tasks", "batch_id", "TEXT")
         _normalize_task_uuids(conn)
+        _ensure_scheduler_state(conn)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxies_queue_order ON proxies(queue_order)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxies_flow_phase ON proxies(flow_phase)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_stage_status ON tasks(detect_stage, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_batch_id ON tasks(batch_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_task_uuid ON tasks(task_uuid)")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _ensure_scheduler_state(conn: sqlite3.Connection) -> None:
+    defaults = {
+        "scan_phase": "primary",
+        "scan_round": "1",
+    }
+    for key, value in defaults.items():
+        conn.execute(
+            """
+            INSERT INTO scheduler_state (state_key, state_value)
+            VALUES (?, ?)
+            ON CONFLICT(state_key) DO NOTHING
+            """,
+            (key, value),
+        )
+
+
+def _state_get(conn: sqlite3.Connection, key: str, default_value: str) -> str:
+    row = conn.execute("SELECT state_value FROM scheduler_state WHERE state_key = ?", (key,)).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO scheduler_state (state_key, state_value) VALUES (?, ?)",
+            (key, default_value),
+        )
+        return default_value
+    return str(row["state_value"])
+
+
+def _state_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO scheduler_state (state_key, state_value)
+        VALUES (?, ?)
+        ON CONFLICT(state_key) DO UPDATE SET state_value = excluded.state_value
+        """,
+        (key, value),
+    )
+
+
+def reset_detection_flow() -> None:
+    """按新规则重置流程：从队列头开始完整首轮扫描。"""
+    conn = _get_conn()
+    try:
+        with _DB_LOCK:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM tasks")
+            conn.execute("DELETE FROM check_results")
+
+            rows = conn.execute("SELECT id FROM proxies ORDER BY id ASC").fetchall()
+            for idx, row in enumerate(rows, start=1):
+                conn.execute(
+                    """
+                    UPDATE proxies
+                    SET queue_order = ?,
+                        flow_phase = 'primary_pending',
+                        status = 'unknown',
+                        pool_tier = 'unknown',
+                        country_code = NULL,
+                        latency_ms = NULL,
+                        error = NULL,
+                        last_checked_at = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (idx, _utcnow(), row["id"]),
+                )
+
+            _state_set(conn, "scan_phase", "primary")
+            _state_set(conn, "scan_round", "1")
+            conn.commit()
     finally:
         conn.close()
 
@@ -482,6 +539,11 @@ def import_proxies(proxy_urls: list[str], max_retries: int) -> tuple[int, int]:
     try:
         with _DB_LOCK:
             conn.execute("BEGIN IMMEDIATE")
+            max_order_row = conn.execute("SELECT COALESCE(MAX(queue_order), 0) AS max_order FROM proxies").fetchone()
+            next_order = int(max_order_row["max_order"] or 0) + 1
+            blacklisted_rows = conn.execute("SELECT proxy_url FROM proxy_blacklist").fetchall()
+            blacklisted = {str(row["proxy_url"]).strip().lower() for row in blacklisted_rows}
+
             for raw_url in proxy_urls:
                 normalized = _normalize_proxy(raw_url)
                 if not normalized:
@@ -495,15 +557,19 @@ def import_proxies(proxy_urls: list[str], max_retries: int) -> tuple[int, int]:
                         if not expanded_normalized:
                             continue
                         proxy_url, protocol = expanded_normalized
+                        if proxy_url.lower() in blacklisted:
+                            ignored += 1
+                            continue
                         cursor = conn.execute(
                             """
-                            INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, created_at, updated_at)
-                            VALUES (?, ?, 'unknown', ?, ?)
+                            INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, pool_tier, queue_order, flow_phase, created_at, updated_at)
+                            VALUES (?, ?, 'unknown', 'unknown', ?, 'primary_pending', ?, ?)
                             """,
-                            (proxy_url, protocol, now, now),
+                            (proxy_url, protocol, next_order, now, now),
                         )
                         if cursor.rowcount > 0:
                             imported += 1
+                            next_order += 1
                         else:
                             ignored += 1
                     continue
@@ -513,15 +579,19 @@ def import_proxies(proxy_urls: list[str], max_retries: int) -> tuple[int, int]:
                     continue
 
                 proxy_url, protocol = normalized
+                if proxy_url.lower() in blacklisted:
+                    ignored += 1
+                    continue
                 cursor = conn.execute(
                     """
-                    INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, created_at, updated_at)
-                    VALUES (?, ?, 'unknown', ?, ?)
+                    INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, pool_tier, queue_order, flow_phase, created_at, updated_at)
+                    VALUES (?, ?, 'unknown', 'unknown', ?, 'primary_pending', ?, ?)
                     """,
-                    (proxy_url, protocol, now, now),
+                    (proxy_url, protocol, next_order, now, now),
                 )
                 if cursor.rowcount > 0:
                     imported += 1
+                    next_order += 1
                 else:
                     ignored += 1
 
@@ -652,11 +722,6 @@ def submit_result(
                 "SELECT * FROM tasks WHERE task_uuid = ?",
                 (task_id,),
             ).fetchone()
-            if task_row is None and str(task_id).isdigit():
-                task_row = conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?",
-                    (int(task_id),),
-                ).fetchone()
             if task_row is None:
                 conn.commit()
                 return False, "Task not found"
@@ -696,83 +761,71 @@ def submit_result(
                 ),
             )
 
-            success_count = conn.execute(
-                "SELECT COALESCE(SUM(success), 0) AS success_count FROM check_results WHERE proxy_id = ?",
-                (task_row["proxy_id"],),
-            ).fetchone()["success_count"]
-            proxy_status = "alive" if int(success_count or 0) >= 2 else "dead"
+            batch_id = str(task_row["batch_id"] or "")
+            stage = str(task_row["detect_stage"] or "primary")
 
-            conn.execute(
-                """
-                UPDATE proxies
-                SET status = ?, country_code = COALESCE(?, country_code), latency_ms = ?, error = ?, last_checked_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (proxy_status, normalized_country, latency_ms, error, now, now, task_row["proxy_id"]),
-            )
+            total_in_batch = conn.execute(
+                "SELECT COUNT(1) AS c FROM tasks WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchone()["c"]
+            finished_in_batch = conn.execute(
+                "SELECT COUNT(1) AS c FROM tasks WHERE batch_id = ? AND status IN ('done', 'failed')",
+                (batch_id,),
+            ).fetchone()["c"]
 
-            if not success and task_row["attempt"] < task_row["max_retries"]:
+            if int(total_in_batch or 0) > 0 and int(finished_in_batch or 0) >= int(total_in_batch or 0):
+                success_count = conn.execute(
+                    "SELECT COUNT(1) AS c FROM tasks WHERE batch_id = ? AND status = 'done'",
+                    (batch_id,),
+                ).fetchone()["c"]
+
+                if int(success_count or 0) >= 3:
+                    new_tier = "excellent"
+                    new_status = "alive"
+                elif int(success_count or 0) >= 1:
+                    new_tier = "good"
+                    new_status = "alive"
+                else:
+                    new_tier = "bad"
+                    new_status = "dead"
+
+                if stage == "primary":
+                    new_phase = "primary_done"
+                elif stage in {"secondary_bad", "secondary_good"}:
+                    new_phase = "secondary_done"
+                elif stage == "monitor":
+                    new_phase = "monitor" if new_tier in {"excellent", "good"} else "monitor_excluded"
+                else:
+                    new_phase = "primary_done"
+
                 conn.execute(
                     """
-                    INSERT INTO tasks (
-                        task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at
-                    )
-                    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+                    UPDATE proxies
+                    SET status = ?,
+                        pool_tier = ?,
+                        flow_phase = ?,
+                        country_code = COALESCE(?, country_code),
+                        latency_ms = ?,
+                        error = ?,
+                        last_checked_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
                     """,
                     (
-                        _new_task_uuid(),
-                        task_row["proxy_id"],
-                        node_name,
-                        worker_id,
-                        task_row["attempt"] + 1,
-                        task_row["max_retries"],
+                        new_status,
+                        new_tier,
+                        new_phase,
+                        normalized_country,
+                        latency_ms,
+                        error,
                         now,
+                        now,
+                        task_row["proxy_id"],
                     ),
                 )
 
             conn.commit()
             return True, "ok"
-    finally:
-        conn.close()
-
-
-def calculate_proxy_pool_tiers() -> None:
-    """根据检测结果自动计算代理池等级：excellent（高成功率）、good（部分成功）、bad（全部失败）。"""
-    excellent_threshold = _excellent_success_rate_threshold()
-    excellent_min_checks = _excellent_min_checks()
-    conn = _get_conn()
-    try:
-        with _DB_LOCK:
-            proxies = conn.execute("SELECT id, proxy_url FROM proxies").fetchall()
-            for proxy_row in proxies:
-                proxy_id = proxy_row["id"]
-                results = conn.execute(
-                    """
-                    SELECT COALESCE(COUNT(*), 0) as total, SUM(success) as success_count
-                    FROM check_results
-                    WHERE proxy_id = ? AND checked_at > datetime('now', '-7 days')
-                    """,
-                    (proxy_id,),
-                ).fetchone()
-
-                if not results or results["total"] == 0:
-                    pool_tier = "unknown"
-                else:
-                    total = results["total"]
-                    success = results["success_count"] or 0
-                    success_rate = success / total
-                    if total >= excellent_min_checks and success_rate >= excellent_threshold:
-                        pool_tier = "excellent"
-                    elif success > 0:
-                        pool_tier = "good"
-                    else:
-                        pool_tier = "bad"
-
-                conn.execute(
-                    "UPDATE proxies SET pool_tier = ? WHERE id = ?",
-                    (pool_tier, proxy_id),
-                )
-            conn.commit()
     finally:
         conn.close()
 
@@ -788,227 +841,244 @@ def _delete_proxies_by_ids(conn: sqlite3.Connection, proxy_ids: list[int]) -> in
     return deleted
 
 
-def cleanup_dead_proxies(days_inactive: int = 1) -> int:
-    """清理长期不可用（status=dead 且 pool_tier=bad）的代理，返回删除数量。"""
-    conn = _get_conn()
-    try:
-        with _DB_LOCK:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days_inactive)
-            cutoff_str = cutoff.isoformat()
-
-            rows = conn.execute(
-                """
-                SELECT id FROM proxies
-                WHERE status = 'dead' AND pool_tier = 'bad' AND updated_at < ?
-                """,
-                (cutoff_str,),
-            ).fetchall()
-            proxy_ids = [row["id"] for row in rows]
-            deleted = _delete_proxies_by_ids(conn, proxy_ids)
-            conn.commit()
-            return deleted
-    finally:
-        conn.close()
-
-
-def cleanup_failed_proxies(fail_threshold: int = 5) -> int:
-    """清理累计失败次数达到阈值且从未成功过的代理。"""
-    conn = _get_conn()
-    try:
-        with _DB_LOCK:
-            rows = conn.execute(
-                """
-                SELECT p.id
-                FROM proxies p
-                JOIN (
-                    SELECT proxy_id,
-                           SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS fail_count,
-                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS success_count
-                    FROM check_results
-                    GROUP BY proxy_id
-                ) agg ON agg.proxy_id = p.id
-                WHERE agg.fail_count >= ? AND COALESCE(agg.success_count, 0) = 0
-                """,
-                (fail_threshold,),
-            ).fetchall()
-            proxy_ids = [row["id"] for row in rows]
-            deleted = _delete_proxies_by_ids(conn, proxy_ids)
-            conn.commit()
-            return deleted
-    finally:
-        conn.close()
-
-
-def cleanup_finished_tasks(retention_days: int = 14) -> int:
-    """清理保留期外的已完成任务（done/failed）及其检测结果。"""
-    if retention_days < 1:
-        return 0
-
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
-    batch_size = _finished_task_cleanup_batch_size()
-    conn = _get_conn()
-    try:
-        with _DB_LOCK:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                """
-                SELECT id
-                FROM tasks
-                WHERE status IN ('done', 'failed')
-                  AND finished_at IS NOT NULL
-                  AND finished_at < ?
-                ORDER BY id ASC
-                LIMIT ?
-                """,
-                (cutoff, batch_size),
-            ).fetchall()
-
-            if not rows:
-                conn.commit()
-                return 0
-
-            task_ids = [row["id"] for row in rows]
-            placeholders = ",".join(["?"] * len(task_ids))
-            conn.execute(f"DELETE FROM check_results WHERE task_id IN ({placeholders})", task_ids)
-            deleted = conn.execute(f"DELETE FROM tasks WHERE id IN ({placeholders})", task_ids).rowcount
-            conn.commit()
-            return deleted
-    finally:
-        conn.close()
-
-
 def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
-    """每 6 小时为每个代理随机分配到 3 个不同地区的在线 worker。"""
+    """新版流程：首轮全量 -> 二轮 bad/good -> black list -> excellent/good 周期巡检。"""
     active_nodes = list_active_nodes()
-    if not active_nodes:
-        return
-
-    nodes_by_region: dict[str, list[dict[str, Any]]] = {}
-    for node in active_nodes:
-        region = _extract_region_from_node_name(str(node.get("node_name", "")))
-        if not region:
-            continue
-        nodes_by_region.setdefault(region, []).append(node)
-
-    if len(nodes_by_region) < 3:
-        # 地区不足 3 个时按需求跳过本轮分发。
+    if len(active_nodes) < 3:
         return
 
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
-    six_hours_ago = (now_dt - timedelta(hours=6)).isoformat()
-    heartbeat_cutoff = (now_dt - timedelta(seconds=60)).isoformat()
-    candidate_regions = list(nodes_by_region.keys())
-    pending_cap = _pending_task_cap()
-    per_cycle_cap = _new_tasks_per_cycle_cap()
-    rebalance_batch_size = _pending_rebalance_batch_size()
+    monitor_cutoff = (now_dt - timedelta(seconds=_monitor_interval_seconds())).isoformat()
+    batch_cap = _dispatch_batch_cap()
 
     conn = _get_conn()
     try:
         with _DB_LOCK:
-            # 先重平衡一批 pending：包括未定向任务和分配给离线 worker 的任务。
-            stale_pending_rows = conn.execute(
-                """
-                SELECT t.id, t.assigned_to
-                FROM tasks t
-                WHERE t.status = 'pending'
-                  AND (
-                    t.assigned_to IS NULL
-                    OR t.assigned_worker_id IS NULL
-                    OR NOT EXISTS (
-                      SELECT 1 FROM node_workers nw
-                      WHERE nw.node_name = t.assigned_to
-                        AND nw.worker_id = t.assigned_worker_id
-                        AND nw.active = 1
-                        AND nw.last_heartbeat > ?
-                    )
-                  )
-                ORDER BY t.id ASC
-                LIMIT ?
-                """,
-                (heartbeat_cutoff, rebalance_batch_size),
-            ).fetchall()
+            phase = _state_get(conn, "scan_phase", "primary")
 
-            for row in stale_pending_rows:
-                preferred_region = _extract_region_from_node_name(str(row["assigned_to"] or ""))
-                candidates = nodes_by_region.get(preferred_region) if preferred_region else None
-                if not candidates:
-                    candidates = active_nodes
-                selected_node = random.choice(candidates)
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET assigned_to = ?, assigned_worker_id = ?
-                    WHERE id = ?
-                    """,
-                    (selected_node["node_name"], selected_node["worker_id"], row["id"]),
-                )
+            # URL 刷新后新代理会以 primary_pending 入队；若当前处于 monitor，需要切回 primary 才会触发首轮检测。
+            if phase == "monitor":
+                new_primary_pending = conn.execute(
+                    "SELECT COUNT(1) AS c FROM proxies WHERE flow_phase = 'primary_pending'"
+                ).fetchone()["c"]
+                if int(new_primary_pending or 0) > 0:
+                    _state_set(conn, "scan_phase", "primary")
+                    phase = "primary"
 
-            pending_count = conn.execute(
-                "SELECT COUNT(*) AS count FROM tasks WHERE status = 'pending'"
-            ).fetchone()["count"]
-
-            if pending_count >= pending_cap:
-                conn.commit()
-                return
-
-            all_proxies = conn.execute(
-                "SELECT id, last_checked_at FROM proxies ORDER BY RANDOM()"
-            ).fetchall()
-
-            generated = 0
-            for proxy_row in all_proxies:
-                proxy_id = proxy_row["id"]
-
-                # 当前代理有未完成任务时跳过，避免重复堆积。
-                in_flight = conn.execute(
-                    """
-                    SELECT 1 FROM tasks
-                    WHERE proxy_id = ? AND status IN ('pending', 'assigned')
-                      AND assigned_to IS NOT NULL
-                      AND assigned_worker_id IS NOT NULL
-                    LIMIT 1
-                    """,
-                    (proxy_id,),
-                ).fetchone()
-                if in_flight:
-                    continue
-
-                last_checked_at = proxy_row["last_checked_at"]
-                if last_checked_at and last_checked_at >= six_hours_ago:
-                    continue
-
-                selected_regions = random.sample(candidate_regions, 3)
-                for region in selected_regions:
-                    selected_node = random.choice(nodes_by_region[region])
+            if phase == "primary":
+                _dispatch_from_phase(conn, active_nodes, source_phase="primary_pending", stage="primary", batch_cap=batch_cap, now=now)
+                primary_left = conn.execute(
+                    "SELECT COUNT(1) AS c FROM proxies WHERE flow_phase IN ('primary_pending', 'primary_dispatched')"
+                ).fetchone()["c"]
+                primary_inflight = conn.execute(
+                    "SELECT COUNT(1) AS c FROM tasks WHERE detect_stage = 'primary' AND status IN ('pending', 'assigned')"
+                ).fetchone()["c"]
+                if int(primary_left or 0) == 0 and int(primary_inflight or 0) == 0:
                     conn.execute(
-                        """
-                        INSERT INTO tasks (
-                            task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at
-                        )
-                        VALUES (?, ?, 'pending', ?, ?, 0, 2, ?)
-                        """,
-                        (
-                            _new_task_uuid(),
-                            proxy_id,
-                            selected_node["node_name"],
-                            selected_node["worker_id"],
-                            now,
-                        ),
+                        "UPDATE proxies SET flow_phase = 'secondary_bad_pending' WHERE pool_tier = 'bad'"
                     )
-                    generated += 1
-                    if generated >= per_cycle_cap:
-                        break
+                    conn.execute(
+                        "UPDATE proxies SET flow_phase = 'secondary_good_pending' WHERE pool_tier = 'good'"
+                    )
+                    conn.execute(
+                        "UPDATE proxies SET flow_phase = 'secondary_done' WHERE pool_tier = 'excellent'"
+                    )
+                    _state_set(conn, "scan_phase", "secondary_bad")
 
-                if generated >= per_cycle_cap:
-                    break
+            elif phase == "secondary_bad":
+                _dispatch_from_phase(conn, active_nodes, source_phase="secondary_bad_pending", stage="secondary_bad", batch_cap=batch_cap, now=now)
+                left = conn.execute(
+                    "SELECT COUNT(1) AS c FROM proxies WHERE flow_phase IN ('secondary_bad_pending', 'secondary_bad_dispatched')"
+                ).fetchone()["c"]
+                inflight = conn.execute(
+                    "SELECT COUNT(1) AS c FROM tasks WHERE detect_stage = 'secondary_bad' AND status IN ('pending', 'assigned')"
+                ).fetchone()["c"]
+                if int(left or 0) == 0 and int(inflight or 0) == 0:
+                    _state_set(conn, "scan_phase", "secondary_good")
+
+            elif phase == "secondary_good":
+                _dispatch_from_phase(conn, active_nodes, source_phase="secondary_good_pending", stage="secondary_good", batch_cap=batch_cap, now=now)
+                left = conn.execute(
+                    "SELECT COUNT(1) AS c FROM proxies WHERE flow_phase IN ('secondary_good_pending', 'secondary_good_dispatched')"
+                ).fetchone()["c"]
+                inflight = conn.execute(
+                    "SELECT COUNT(1) AS c FROM tasks WHERE detect_stage = 'secondary_good' AND status IN ('pending', 'assigned')"
+                ).fetchone()["c"]
+                if int(left or 0) == 0 and int(inflight or 0) == 0:
+                    _blacklist_and_prune_bad(conn, now=now)
+                    conn.execute("UPDATE proxies SET flow_phase = 'monitor' WHERE pool_tier IN ('excellent', 'good')")
+                    _state_set(conn, "scan_phase", "monitor")
+                    current_round = int(_state_get(conn, "scan_round", "1") or "1")
+                    _state_set(conn, "scan_round", str(current_round + 1))
+
+            else:
+                _dispatch_monitor(conn, active_nodes, batch_cap=batch_cap, monitor_cutoff=monitor_cutoff, now=now)
 
             conn.commit()
     finally:
         conn.close()
 
 
-def list_proxies(status: Optional[str], pool_tier: Optional[str], limit: int, offset: int) -> list[dict[str, Any]]:
+def _pick_three_workers(active_nodes: list[dict[str, Any]]) -> Optional[list[dict[str, Any]]]:
+    by_region: dict[str, list[dict[str, Any]]] = {}
+    for node in active_nodes:
+        region = _extract_region_from_node_name(str(node.get("node_name", ""))) or "ZZ"
+        by_region.setdefault(region, []).append(node)
+
+    if len(by_region) >= 3:
+        regions = random.sample(list(by_region.keys()), 3)
+        return [random.choice(by_region[region]) for region in regions]
+
+    if len(active_nodes) < 3:
+        return None
+    return random.sample(active_nodes, 3)
+
+
+def _proxy_has_inflight(conn: sqlite3.Connection, proxy_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM tasks
+        WHERE proxy_id = ? AND status IN ('pending', 'assigned')
+        LIMIT 1
+        """,
+        (proxy_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _dispatch_from_phase(
+    conn: sqlite3.Connection,
+    active_nodes: list[dict[str, Any]],
+    source_phase: str,
+    stage: str,
+    batch_cap: int,
+    now: str,
+) -> None:
+    for _ in range(batch_cap):
+        proxy_row = conn.execute(
+            """
+            SELECT id
+            FROM proxies
+            WHERE flow_phase = ?
+            ORDER BY queue_order ASC, id ASC
+            LIMIT 1
+            """,
+            (source_phase,),
+        ).fetchone()
+        if proxy_row is None:
+            break
+
+        proxy_id = int(proxy_row["id"])
+        if _proxy_has_inflight(conn, proxy_id):
+            break
+
+        workers = _pick_three_workers(active_nodes)
+        if workers is None:
+            break
+
+        batch_id = _new_task_uuid()
+        for node in workers:
+            conn.execute(
+                """
+                INSERT INTO tasks (
+                    task_uuid, proxy_id, status, assigned_to, assigned_worker_id, assigned_at,
+                    attempt, max_retries, created_at, detect_stage, batch_id
+                )
+                VALUES (?, ?, 'pending', ?, ?, NULL, 0, 0, ?, ?, ?)
+                """,
+                (
+                    _new_task_uuid(),
+                    proxy_id,
+                    node["node_name"],
+                    node["worker_id"],
+                    now,
+                    stage,
+                    batch_id,
+                ),
+            )
+
+        dispatched_phase = {
+            "primary_pending": "primary_dispatched",
+            "secondary_bad_pending": "secondary_bad_dispatched",
+            "secondary_good_pending": "secondary_good_dispatched",
+        }.get(source_phase, source_phase)
+        conn.execute("UPDATE proxies SET flow_phase = ? WHERE id = ?", (dispatched_phase, proxy_id))
+
+
+def _dispatch_monitor(
+    conn: sqlite3.Connection,
+    active_nodes: list[dict[str, Any]],
+    batch_cap: int,
+    monitor_cutoff: str,
+    now: str,
+) -> None:
+    for _ in range(batch_cap):
+        proxy_row = conn.execute(
+            """
+            SELECT id
+            FROM proxies
+            WHERE flow_phase = 'monitor'
+              AND pool_tier IN ('excellent', 'good')
+              AND (last_checked_at IS NULL OR last_checked_at < ?)
+            ORDER BY queue_order ASC, id ASC
+            LIMIT 1
+            """,
+            (monitor_cutoff,),
+        ).fetchone()
+        if proxy_row is None:
+            break
+
+        proxy_id = int(proxy_row["id"])
+        if _proxy_has_inflight(conn, proxy_id):
+            break
+
+        workers = _pick_three_workers(active_nodes)
+        if workers is None:
+            break
+
+        batch_id = _new_task_uuid()
+        for node in workers:
+            conn.execute(
+                """
+                INSERT INTO tasks (
+                    task_uuid, proxy_id, status, assigned_to, assigned_worker_id, assigned_at,
+                    attempt, max_retries, created_at, detect_stage, batch_id
+                )
+                VALUES (?, ?, 'pending', ?, ?, NULL, 0, 0, ?, 'monitor', ?)
+                """,
+                (
+                    _new_task_uuid(),
+                    proxy_id,
+                    node["node_name"],
+                    node["worker_id"],
+                    now,
+                    batch_id,
+                ),
+            )
+
+
+def _blacklist_and_prune_bad(conn: sqlite3.Connection, now: str) -> None:
+    bad_rows = conn.execute("SELECT id, proxy_url FROM proxies WHERE pool_tier = 'bad'").fetchall()
+    if not bad_rows:
+        return
+
+    for row in bad_rows:
+        conn.execute(
+            """
+            INSERT INTO proxy_blacklist (proxy_url, reason, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(proxy_url) DO UPDATE SET reason = excluded.reason, created_at = excluded.created_at
+            """,
+            (row["proxy_url"], "second-pass-bad", now),
+        )
+
+    proxy_ids = [int(row["id"]) for row in bad_rows]
+    _delete_proxies_by_ids(conn, proxy_ids)
+
+
+def list_proxies(status: Optional[str], pool_tier: Optional[str], protocol: Optional[str], limit: int, offset: int) -> list[dict[str, Any]]:
     conn = _get_conn()
     try:
         where_clauses = []
@@ -1020,6 +1090,9 @@ def list_proxies(status: Optional[str], pool_tier: Optional[str], limit: int, of
         if pool_tier:
             where_clauses.append("pool_tier = ?")
             params.append(pool_tier)
+        if protocol:
+            where_clauses.append("lower(protocol) = lower(?)")
+            params.append(protocol)
 
         where_sql = ""
         if where_clauses:

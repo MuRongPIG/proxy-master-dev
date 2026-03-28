@@ -12,10 +12,10 @@
 - **节点具名与心跳**：支持自动命名与心跳机制。若不传 node_name，节点默认按 `AA-node-BB` 规则生成（AA 为节点公网 IP 所属国家两位大写码，BB 为该国家在主服务器登记顺序）。
 - **自动任务分发**：后台定时向各在线节点分发检测任务，确保每个代理被多个节点检测到。
 - **代理池分层**：根据检测结果自动分为三级代理池：
-  - excellent：近 7 天内检测成功率达到阈值（默认 >= 80%，且至少 3 次检测）
-  - good：有成功记录但未达到 excellent 判定阈值
-  - bad：所有节点检测均失败
-- **动态管理**：自动清理长期（1天+）不可用的代理，定期重算代理池等级，并自动清理达到失败阈值的代理。
+  - excellent：同一批次（3 节点）全部成功
+  - good：同一批次成功 1~2 次
+  - bad：同一批次全部失败
+- **两阶段 + 黑名单流程**：首轮全量遍历后，二轮先检测 bad 再检测 good；二轮仍为 bad 的代理写入黑名单并从主表移除。
 - **多源导入**：支持 JSON、单网页 URL、多网页 URL（并发）、文件导入。
 - **启动自动导入**：主服务器启动时可自动从本地代理文件和 URL 列表导入代理。
 - **定时 URL 刷新**：主服务器可按固定间隔自动从 URL 重新抓取代理。
@@ -100,7 +100,7 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 ### 主服务器
 
 ```bash
-NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
 主服务器从环境变量 `NODE_TOKEN` 读取令牌。
@@ -113,10 +113,6 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 - `--bootstrap-max-retries`：自动导入任务生成时的最大重试次数。
 - `--pool-export-dir`：代理池可用代理导出目录；默认 `db-path` 同目录下 `pool_exports`。
 - `--pool-export-interval-seconds`：代理池导出间隔，默认 300 秒，最小 30 秒。
-- `--excellent-success-rate`：excellent 判定成功率阈值，默认 0.8（范围限制 0.5~1.0）。
-- `--excellent-min-checks`：excellent 判定最小检测次数，默认 3（范围限制 1~20）。
-- `--task-retention-days`：终态任务（done/failed）保留天数，默认 14；设置为 0 表示不自动清理。
-- `--task-cleanup-interval-seconds`：终态任务清理间隔秒数，默认 600，最小 30。
 - `--log-dir`：日志目录；默认 `db-path` 同目录下 `logs/master`。
 - `--log-level`：日志级别，默认 `INFO`。
 - `--log-retention-days`：日志保留天数，默认 14；超过保留周期的历史日志会自动清理。
@@ -129,13 +125,12 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
   - 对 GitHub 项目源检查仓库 `pushed_at`，超过 7 天不纳入可用名单
   - 对仅 `ip:port` 的代理：优先根据来源 URL/文件名推断协议类型（如 socks4/socks5/http/https）；若无法推断，则自动按 `http/https/socks4/socks5` 全类型加入
 
-后台会自动启动以下定时任务（每 30 秒一次）：
-- 向在线节点分发代理检测任务
-- 重算代理池等级
-- 清理长期不可用代理
+后台会自动启动以下定时任务（每 7200 秒一次）：
+- 按新流程分发任务：首轮全量遍历，再进行 bad/good 二次检测
+- 将二次检测后的 bad 代理写入黑名单并从总表移除
+- 仅对 excellent/good 代理执行周期巡检
 - 按配置间隔从 URL 自动刷新代理
 - 执行全池去重（规范化并合并重复代理）
-- 按保留策略自动清理过期终态任务（done/failed）
 - 按配置间隔将可用代理（status=alive）导出到 `output/` 目录，并按协议分子目录
 
 默认导出结构（以 `--pool-export-dir` 为目录）：
@@ -173,9 +168,7 @@ python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worke
 - `--log-level`：日志级别，默认 `INFO`
 - `--log-retention-days`：日志保留天数，默认 14；超过保留周期的历史日志会自动清理
 
-若不传 `--node-token`，worker 会按顺序尝试：
-- 读取环境变量 `NODE_TOKEN`
-- 读取文件 `NODE_TOKEN_FILE`（默认等待 30 秒，可用 `NODE_TOKEN_FILE_WAIT_SECONDS` 调整）
+worker 从环境变量 `NODE_TOKEN` 读取令牌。
 
 说明：
 - 默认 `worker_count=4`，会自动启动 `worker-1` 到 `worker-4` 并发检测。
@@ -186,7 +179,7 @@ python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worke
 ### 统一入口（可选）
 
 ```bash
-NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```
 
@@ -540,49 +533,7 @@ socks5://9.9.9.9:1080
 
 说明：基于 `status=alive` 的全量代理统计，不受分页或前端筛选影响。
 
-### 9. 手动重算代理池等级
-
-- 方法路径：POST /pool/recalculate
-- 请求体：无
-- 响应 200
-
-```json
-{
-  "status": "ok"
-}
-```
-
-说明：后台已自动每 30 秒执行一次，无需手动触发。
-
-### 10. 手动清理不可用代理
-
-- 方法路径：POST /pool/cleanup?days=1
-- 请求体：无
-- 响应 200
-
-```json
-{
-  "deleted": 5
-}
-```
-
-说明：清理超过指定天数（默认 1 天）且状态为 "dead" 且池等级为 "bad" 的代理。
-
-### 10.1 手动清理失败次数达到阈值的代理
-
-- 方法路径：POST /pool/cleanup-failed?fail_threshold=5
-- 请求体：无
-- 响应 200
-
-```json
-{
-  "deleted": 3
-}
-```
-
-说明：清理累计失败次数达到阈值且从未成功过的代理。后台默认阈值为 5。
-
-### 11. 手动指派检测任务
+### 9. 手动触发一次分发循环
 
 - 方法路径：POST /distribution/dispatch
 - 请求体：无
@@ -594,9 +545,9 @@ socks5://9.9.9.9:1080
 }
 ```
 
-说明：后台已自动每 30 秒执行一次，确保每个代理被所有在线节点检测到。
+说明：后台已自动每 7200 秒执行一次。该接口用于立即触发一次新流程分发。
 
-### 12. 节点拉取任务（内部接口）
+### 10. 节点拉取任务（内部接口）
 
 - 方法路径：POST /node/pull-task
 - 请求头：X-Node-Token: your-token
@@ -635,7 +586,7 @@ socks5://9.9.9.9:1080
 }
 ```
 
-### 13. 节点提交结果（内部接口）
+### 11. 节点提交结果（内部接口）
 
 - 方法路径：POST /node/push-result/{task_id}
 - 请求头：X-Node-Token: your-token
@@ -692,8 +643,10 @@ http://1.1.1.1:80
    ```
 
 3. **后台自动分发任务**
-   - 每 30 秒，主服务器自动向所有在线节点分发待检测的代理任务
-   - 每个代理都会被分配给所有在线节点进行检测
+  - 每 7200 秒，主服务器按两阶段流程自动分发：
+    - 首轮：按队列顺序从头遍历，每个代理分配给 3 个节点
+    - 二轮：先检测首轮 bad，再检测首轮 good
+  - 二轮后仍为 bad 的代理写入黑名单，不再从导入源回流到总表
 
 4. **节点执行检测并上报**
    - 节点从主服务器拉取任务，检测代理可用性
@@ -706,9 +659,12 @@ http://1.1.1.1:80
    ```
 
 6. **代理池自动更新**
-  - 每 30 秒重算每个代理的池等级（excellent/good/bad/unknown）
-  - 清理 1 天内一直不可用的代理
-  - 清理累计失败次数达到阈值（默认 5 次）的代理
+  - 每个代理在一个 3 节点批次结束后立即判级：
+    - 3 成功 -> excellent
+    - 1~2 成功 -> good
+    - 0 成功 -> bad
+  - 二轮后 bad 进入黑名单并从主表移除
+  - excellent/good 进入周期巡检
   - 执行全池去重，并自动迁移重复代理关联的任务和检测结果
   - 按配置导出可用代理到 `output/<protocol>/` 下的分层文件
 

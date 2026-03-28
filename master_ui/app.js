@@ -8,7 +8,7 @@ createApp({
         { key: "proxies", name: "代理池", desc: "代理池查询与过滤" },
         { key: "tasks", name: "任务中心", desc: "任务生命周期与 UUID 跟踪" },
         { key: "nodes", name: "节点中心", desc: "在线节点与 worker 心跳" },
-        { key: "ops", name: "运维操作", desc: "导入、分发、清理、重算" },
+        { key: "ops", name: "运维操作", desc: "导入与两阶段流程触发" },
       ],
       activeTab: "overview",
       cfg: {
@@ -17,7 +17,7 @@ createApp({
         refreshSeconds: Number(localStorage.getItem("master_ui_refresh_seconds") || "15"),
       },
       filters: {
-        proxyStatus: "alive",
+        proxyStatus: "",
         proxyTier: "",
         proxyProtocol: "",
         proxyLimit: 100,
@@ -35,8 +35,6 @@ createApp({
         importUrlsRetries: 2,
         importFile: null,
         importFileRetries: 2,
-        cleanupDeadDays: 1,
-        cleanupFailThreshold: 5,
       },
       health: { ok: false, text: "未连接" },
       stats: {
@@ -481,23 +479,6 @@ createApp({
     },
     dispatch() {
       return this.doAction("分发任务", () => this.api("POST", "/distribution/dispatch"));
-    },
-    recalc() {
-      return this.doAction("重算池分层", () => this.api("POST", "/pool/recalculate"));
-    },
-    cleanupDead() {
-      return this.doAction("清理死代理", () =>
-        this.api("POST", "/pool/cleanup", {
-          query: { days: Number(this.ops.cleanupDeadDays || 1) },
-        }),
-      );
-    },
-    cleanupFailed() {
-      return this.doAction("清理失败代理", () =>
-        this.api("POST", "/pool/cleanup-failed", {
-          query: { fail_threshold: Number(this.ops.cleanupFailThreshold || 5) },
-        }),
-      );
     },
   },
   async mounted() {
