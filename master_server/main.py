@@ -7,37 +7,12 @@ import uvicorn
 from master_server.logging_utils import setup_master_logging
 
 
-def _resolve_node_token(node_token: str, db_path: str) -> str:
-    explicit = node_token.strip()
-    if explicit:
-        return explicit
-
+def _resolve_node_token() -> str:
     env_token = os.getenv("NODE_TOKEN", "").strip()
     if env_token:
         return env_token
 
-    token_file = os.getenv("NODE_TOKEN_FILE", "").strip()
-    if not token_file:
-        db_dir = os.path.dirname(db_path) or "."
-        token_file = os.path.join(db_dir, "node_token.txt")
-
-    try:
-        with open(token_file, "r", encoding="utf-8") as fp:
-            from_file = fp.read().strip()
-            if from_file:
-                return from_file
-    except OSError:
-        pass
-
-    generated = secrets.token_urlsafe(24)
-    try:
-        os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
-        with open(token_file, "w", encoding="utf-8") as fp:
-            fp.write(generated)
-        print(f"[master] NODE_TOKEN 未提供，已自动生成并保存到: {token_file}")
-    except OSError:
-        print("[master] NODE_TOKEN 未提供，已自动生成临时 token（未写入文件）")
-    return generated
+    raise ValueError("无法从 NODE_TOKEN 环境变量获取令牌，必须在 composer 中指定！")
 
 
 def main() -> None:
@@ -45,7 +20,6 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=62071)
     parser.add_argument("--db-path", default="proxy_checker.db")
-    parser.add_argument("--node-token", default="", help="节点鉴权令牌；不传则自动生成")
     parser.add_argument("--bootstrap-proxy-files", default="", help="启动时导入的本地代理文件，多个用逗号分隔")
     parser.add_argument("--bootstrap-proxy-urls", default="", help="启动时导入并定时刷新的代理 URL，多个用逗号分隔")
     parser.add_argument(
@@ -64,7 +38,7 @@ def main() -> None:
     parser.add_argument("--log-retention-days", type=int, default=14, help="日志保留天数，默认 14")
     parser.add_argument("--ui-cors-origins", default="*", help="允许 UI 访问的 CORS 源，多个用逗号分隔")
     args = parser.parse_args()
-    resolved_token = _resolve_node_token(args.node_token, args.db_path)
+    resolved_token = _resolve_node_token()
 
     resolved_log_dir = args.log_dir.strip() or os.path.join(os.path.dirname(args.db_path) or ".", "logs", "master")
     setup_master_logging(

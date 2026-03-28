@@ -6,9 +6,8 @@ services:
     container_name: proxy-worker
     restart: unless-stopped
     environment:
-      MASTER_URL: ${MASTER_URL:-http://host.docker.internal:62071}
-      NODE_TOKEN_FILE: /data/node_token.txt
-      NODE_TOKEN_FILE_WAIT_SECONDS: 30
+      MASTER_URL: localhost:62071
+      NODE_TOKEN: murongpig
       WORKER_ID: worker
       WORKER_COUNT: 4
       INTERVAL: 2
@@ -18,5 +17,7 @@ services:
       LOG_DIR: /data/logs/worker
       LOG_LEVEL: INFO
       LOG_RETENTION_DAYS: 14
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data

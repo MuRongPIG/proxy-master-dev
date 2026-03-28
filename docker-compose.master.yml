@@ -8,6 +8,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 62071
+      NODE_TOKEN: murongpig
       DB_PATH: /data/proxy_checker.db
       BOOTSTRAP_PROXY_URL_FILE: master_server/bootstrap_proxy_urls.txt
       URL_REFRESH_INTERVAL_SECONDS: 300

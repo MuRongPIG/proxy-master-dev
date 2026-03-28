@@ -29,77 +29,26 @@ def _detect_country_code() -> str:
 	return "ZZ"
 
 
-def _resolve_master_node_token(node_token: str, db_path: str) -> str:
-	explicit = node_token.strip()
-	if explicit:
-		return explicit
-
+def _resolve_master_node_token() -> str:
 	env_token = os.getenv("NODE_TOKEN", "").strip()
 	if env_token:
 		return env_token
 
-	token_file = os.getenv("NODE_TOKEN_FILE", "").strip()
-	if not token_file:
-		db_dir = os.path.dirname(db_path) or "."
-		token_file = os.path.join(db_dir, "node_token.txt")
-
-	try:
-		with open(token_file, "r", encoding="utf-8") as fp:
-			from_file = fp.read().strip()
-			if from_file:
-				return from_file
-	except OSError:
-		pass
-
-	generated = secrets.token_urlsafe(24)
-	try:
-		os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
-		with open(token_file, "w", encoding="utf-8") as fp:
-			fp.write(generated)
-		print(f"[master] NODE_TOKEN 未提供，已自动生成并保存到: {token_file}")
-	except OSError:
-		print("[master] NODE_TOKEN 未提供，已自动生成临时 token（未写入文件）")
-	return generated
+	raise ValueError("无法从 NODE_TOKEN 环境变量获取令牌，必须在 composer 中指定！")
 
 
-def _resolve_worker_node_token(node_token: str) -> str:
-	explicit = node_token.strip()
-	if explicit:
-		return explicit
-
+def _resolve_worker_node_token() -> str:
 	env_token = os.getenv("NODE_TOKEN", "").strip()
 	if env_token:
 		return env_token
 
-	token_file = os.getenv("NODE_TOKEN_FILE", "").strip()
-	if token_file:
-		try:
-			wait_seconds = int(os.getenv("NODE_TOKEN_FILE_WAIT_SECONDS", "30"))
-		except ValueError:
-			wait_seconds = 30
-		wait_seconds = max(0, wait_seconds)
-		deadline = time.time() + wait_seconds
-		while True:
-			try:
-				with open(token_file, "r", encoding="utf-8") as fp:
-					from_file = fp.read().strip()
-					if from_file:
-						return from_file
-			except OSError:
-				pass
-
-			if time.time() >= deadline:
-				break
-			time.sleep(1)
-
-	raise ValueError("未提供 --node-token，且无法从 NODE_TOKEN 或 NODE_TOKEN_FILE 获取令牌")
+	raise ValueError("无法从 NODE_TOKEN 环境变量获取令牌，必须在 composer 中指定！")
 
 
 def _run_master(
 	host: str,
 	port: int,
 	db_path: str,
-	node_token: str,
 	bootstrap_proxy_files: str,
 	bootstrap_proxy_urls: str,
 	bootstrap_proxy_url_file: str,
@@ -115,7 +64,7 @@ def _run_master(
 	ui_cors_origins: str,
 ) -> None:
 	import uvicorn
-	resolved_token = _resolve_master_node_token(node_token=node_token, db_path=db_path)
+	resolved_token = _resolve_master_node_token()
 	resolved_log_dir = log_dir.strip() or os.path.join(os.path.dirname(db_path) or ".", "logs", "master")
 	setup_master_logging(
 		log_dir=resolved_log_dir,
@@ -146,7 +95,6 @@ def _run_worker(
 	node_name: str | None,
 	worker_id: str,
 	worker_count: int,
-	node_token: str,
 	interval: float,
 	timeout: float,
 	heartbeat_interval: float,
@@ -157,7 +105,7 @@ def _run_worker(
 ) -> None:
 	from worker_node.gateway import MasterNodeGateway
 	from worker_node.node import DetectorNode
-	resolved_token = _resolve_worker_node_token(node_token=node_token)
+	resolved_token = _resolve_worker_node_token()
 	resolved_log_dir = log_dir.strip() or os.path.join(".", "logs", "worker")
 	setup_worker_logging(
 		log_dir=resolved_log_dir,
@@ -212,7 +160,6 @@ def main() -> None:
 	master_parser.add_argument("--host", default="127.0.0.1")
 	master_parser.add_argument("--port", type=int, default=62071)
 	master_parser.add_argument("--db-path", default="proxy_checker.db")
-	master_parser.add_argument("--node-token", default="")
 	master_parser.add_argument("--bootstrap-proxy-files", default="")
 	master_parser.add_argument("--bootstrap-proxy-urls", default="")
 	master_parser.add_argument("--bootstrap-proxy-url-file", default="master_server/bootstrap_proxy_urls.txt")
@@ -232,7 +179,6 @@ def main() -> None:
 	worker_parser.add_argument("--node-name", required=False, default=None, help="节点名称；不传则自动生成 AA-node-BB")
 	worker_parser.add_argument("--worker-id", default="worker")
 	worker_parser.add_argument("--worker-count", type=int, default=4)
-	worker_parser.add_argument("--node-token", default="")
 	worker_parser.add_argument("--interval", type=float, default=2.0)
 	worker_parser.add_argument("--timeout", type=float, default=8.0)
 	worker_parser.add_argument("--heartbeat-interval", type=float, default=15.0)
@@ -248,7 +194,6 @@ def main() -> None:
 			host=args.host,
 			port=args.port,
 			db_path=args.db_path,
-			node_token=args.node_token,
 			bootstrap_proxy_files=args.bootstrap_proxy_files,
 			bootstrap_proxy_urls=args.bootstrap_proxy_urls,
 			bootstrap_proxy_url_file=args.bootstrap_proxy_url_file,
@@ -269,7 +214,6 @@ def main() -> None:
 			node_name=args.node_name,
 			worker_id=args.worker_id,
 			worker_count=args.worker_count,
-			node_token=args.node_token,
 			interval=args.interval,
 			timeout=args.timeout,
 			heartbeat_interval=args.heartbeat_interval,

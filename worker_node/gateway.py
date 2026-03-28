@@ -14,12 +14,19 @@ class MasterNodeGateway:
         node_token: str,
         request_timeout: float = 10.0,
     ) -> None:
-        self.master_url = master_url.rstrip("/")
         self.node_name = node_name
         self.worker_id = worker_id
         self.node_token = node_token
         self.request_timeout = request_timeout
         self.session = requests.Session()
+        
+        # 始终确保 master_url 包含 'http' scheme，以防用户的配置漏了 'http://'
+        master_url = master_url.rstrip("/")
+        if not master_url.startswith("http://") and not master_url.startswith("https://"):
+            master_url = f"http://{master_url}"
+        
+        self.master_url = master_url
+
         self.session.headers.update(
             {
                 "Content-Type": "application/json",

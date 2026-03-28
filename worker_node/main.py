@@ -11,37 +11,12 @@ from worker_node.logging_utils import setup_worker_logging
 from worker_node.node import DetectorNode
 
 
-def _resolve_node_token(node_token: str) -> str:
-    explicit = node_token.strip()
-    if explicit:
-        return explicit
-
+def _resolve_node_token() -> str:
     env_token = os.getenv("NODE_TOKEN", "").strip()
     if env_token:
         return env_token
 
-    token_file = os.getenv("NODE_TOKEN_FILE", "").strip()
-    if token_file:
-        try:
-            wait_seconds = int(os.getenv("NODE_TOKEN_FILE_WAIT_SECONDS", "30"))
-        except ValueError:
-            wait_seconds = 30
-        wait_seconds = max(0, wait_seconds)
-        deadline = time.time() + wait_seconds
-        while True:
-            try:
-                with open(token_file, "r", encoding="utf-8") as fp:
-                    from_file = fp.read().strip()
-                    if from_file:
-                        return from_file
-            except OSError:
-                pass
-
-            if time.time() >= deadline:
-                break
-            time.sleep(1)
-
-    raise ValueError("未提供 --node-token，且无法从 NODE_TOKEN 或 NODE_TOKEN_FILE 获取令牌")
+    raise ValueError("无法从 NODE_TOKEN 环境变量获取令牌，必须在 composer 中指定！")
 
 
 def _detect_country_code() -> str:
@@ -68,7 +43,6 @@ def main() -> None:
     parser.add_argument("--node-name", required=False, default=None, help="节点名称；不传则自动生成 AA-node-BB")
     parser.add_argument("--worker-id", default="worker")
     parser.add_argument("--worker-count", type=int, default=4, help="单节点并发 worker 数，默认 4")
-    parser.add_argument("--node-token", default="", help="节点鉴权令牌；不传则尝试自动读取")
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--heartbeat-interval", type=float, default=15.0)
@@ -78,7 +52,7 @@ def main() -> None:
     parser.add_argument("--log-retention-days", type=int, default=14, help="日志保留天数，默认 14")
 
     args = parser.parse_args()
-    resolved_token = _resolve_node_token(args.node_token)
+    resolved_token = _resolve_node_token()
     resolved_log_dir = args.log_dir.strip() or os.path.join(".", "logs", "worker")
     setup_worker_logging(
         log_dir=resolved_log_dir,
