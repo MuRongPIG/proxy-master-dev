@@ -9,6 +9,8 @@ Upgraded with Vue 3 + ECharts.
 - Input API base URL and token in top bar.
 - Dashboard tabs: Overview, Proxies, Tasks, Nodes, Operations.
 - Charts powered by ECharts (tier distribution + task status).
+- Overview shows alive rate: `proxy_alive / (proxy_alive + proxy_dead)`.
+- Proxies table includes `country_code` from worker check reports.
 - Auto refresh and activity log for operations.
 
 ## Run
@@ -33,7 +35,7 @@ Then open:
 If UI and API are on different origins, start master with CORS enabled:
 
 ```bash
-python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
 ```
 
 Use `*` to allow all origins in development.

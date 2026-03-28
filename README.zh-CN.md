@@ -62,20 +62,8 @@ docker run -d --name proxy-master -p 62071:62071 -v $(pwd)/data:/data -e NODE_TO
 运行检测节点容器：
 
 ```bash
-docker run -d --name proxy-worker -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN=your-token -e WORKER_COUNT=4 proxy-worker:latest
+docker run -d --name proxy-worker -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN=your-token -e WORKER_COUNT=4 -e TARGET_URL=https://npmjs.org/cdn-cgi/trace proxy-worker:latest
 ```
-
-不手动提供 token（自动模式）：
-
-```bash
-# 仅启动 master：会自动生成 token 并保存到 data/node_token.txt
-docker run -d --name proxy-master -p 62071:62071 -v $(pwd)/data:/data proxy-master:latest
-
-# 启动 worker：从同一挂载目录读取 token 文件
-docker run -d --name proxy-worker -v $(pwd)/data:/data -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN_FILE=/data/node_token.txt -e WORKER_COUNT=4 proxy-worker:latest
-```
-
-说明：worker 在未提供 `NODE_TOKEN` 时，会尝试从 `NODE_TOKEN_FILE` 读取，并默认最多等待 30 秒（可用 `NODE_TOKEN_FILE_WAIT_SECONDS` 调整）。
 
 可使用完全拆分的 compose 独立启动（推荐）：
 
@@ -106,16 +94,16 @@ python -m http.server 5173
 如果 UI 与 API 不同源，请启动主服务器时配置 CORS：
 
 ```bash
-python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
 ```
 
 ### 主服务器
 
 ```bash
-python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
-如不传 `--node-token`，master 会自动生成 token 并默认写入 `db-path` 同目录下的 `node_token.txt`。
+主服务器从环境变量 `NODE_TOKEN` 读取令牌。
 
 参数说明：
 - `--bootstrap-proxy-files`：启动时导入本地代理文件（多个文件用逗号分隔）。
@@ -174,7 +162,7 @@ python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker
 节点启动后会自动向主服务器注册，然后轮询拉取任务并执行检测。
 
 ```bash
-python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token
+python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace
 ```
 
 可选日志参数：
@@ -190,12 +178,13 @@ python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worke
 - 默认 `worker_count=4`，会自动启动 `worker-1` 到 `worker-4` 并发检测。
 - 可通过 `--worker-count` 调整单节点并发 worker 数量。
 - 若不传 `--node-name`，将自动生成 `AA-node-BB`（如 `US-node-01`）。
+- 默认检测地址为 `https://npmjs.org/cdn-cgi/trace`，会从返回内容提取 `loc=XX` 作为国家码上报。
 
 ### 统一入口（可选）
 
 ```bash
-python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
-python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```
 
 ## API 文档（JSON 请求/响应示例）
@@ -432,6 +421,7 @@ socks5://9.9.9.9:1080
     "protocol": "http",
     "status": "alive",
     "pool_tier": "excellent",
+    "country_code": "US",
     "latency_ms": 245,
     "error": null,
     "last_checked_at": "2026-03-27T13:10:00+00:00",
@@ -444,6 +434,7 @@ socks5://9.9.9.9:1080
         "latency_ms": 245,
         "response_status": 200,
         "error": null,
+        "country_code": "US",
         "checked_at": "2026-03-27T13:10:00+00:00"
       },
       {
@@ -453,6 +444,7 @@ socks5://9.9.9.9:1080
         "latency_ms": 1800,
         "response_status": null,
         "error": "Read timed out",
+        "country_code": null,
         "checked_at": "2026-03-27T13:08:22+00:00"
       }
     ]
@@ -610,7 +602,8 @@ socks5://9.9.9.9:1080
   "success": true,
   "latency_ms": 245,
   "response_status": 200,
-  "error": null
+  "error": null,
+  "country_code": "US"
 }
 ```
 
@@ -671,6 +664,8 @@ http://1.1.1.1:80
   - 清理累计失败次数达到阈值（默认 5 次）的代理
   - 执行全池去重，并自动迁移重复代理关联的任务和检测结果
   - 按配置导出可用代理到 `output/<protocol>/` 下的分层文件
+
+UI 总览页新增“存活率”指标：`存活代理 / (存活代理 + 失效代理)`。
 
 ## 鉴权与传输安全
 

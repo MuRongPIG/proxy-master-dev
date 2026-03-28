@@ -76,22 +76,8 @@ docker run -d --name proxy-master -p 62071:62071 -v $(pwd)/data:/data -e NODE_TO
 Run worker container:
 
 ```bash
-docker run -d --name proxy-worker -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN=your-token -e WORKER_COUNT=4 proxy-worker:latest
+docker run -d --name proxy-worker -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN=your-token -e WORKER_COUNT=4 -e TARGET_URL=https://npmjs.org/cdn-cgi/trace proxy-worker:latest
 ```
-
-Automatic token mode (no manual token input):
-
-```bash
-# Start master only. It will generate token at data/node_token.txt
-docker run -d --name proxy-master -p 62071:62071 -v $(pwd)/data:/data proxy-master:latest
-
-# Start worker. It reads token from shared mount path
-docker run -d --name proxy-worker -v $(pwd)/data:/data -e MASTER_URL=http://host.docker.internal:62071 -e NODE_TOKEN_FILE=/data/node_token.txt -e WORKER_COUNT=4 proxy-worker:latest
-```
-
-Notes:
-- If `NODE_TOKEN` is not provided, worker tries `NODE_TOKEN_FILE`.
-- Default waiting time is 30 seconds, configurable with `NODE_TOKEN_FILE_WAIT_SECONDS`.
 
 Run with split compose files (recommended):
 
@@ -124,16 +110,16 @@ Open `http://127.0.0.1:5173` and enter:
 If UI and API are cross-origin, enable CORS on master startup:
 
 ```bash
-python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --ui-cors-origins "http://127.0.0.1:5173,http://localhost:5173"
 ```
 
 ## Run Master Server (Python)
 
 ```bash
-python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
-If `--node-token` is omitted, master auto-generates one and writes `node_token.txt` next to the database path.
+Master reads token from environment variable `NODE_TOKEN`.
 
 Important options:
 - `--bootstrap-proxy-files`: comma-separated local proxy files to import at startup.
@@ -170,7 +156,7 @@ Background jobs (every 30 seconds):
 After startup, a worker auto-registers on master and continuously pulls check tasks.
 
 ```bash
-python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token
+python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace
 ```
 
 Optional logging options:
@@ -186,13 +172,14 @@ Notes:
 - Default `worker_count` is 4, starting concurrent workers from `worker-1` to `worker-4`.
 - You can tune concurrency with `--worker-count`.
 - If `--node-name` is omitted, a name like `US-node-01` is auto-generated.
+- Default probe target is `https://npmjs.org/cdn-cgi/trace`; worker extracts `loc=XX` and reports country code.
 
 ## Unified Entry Point (Optional)
 
 ```bash
-python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --node-token your-token --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 
-python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
+python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```
 
 ## API Overview
@@ -204,6 +191,8 @@ Main endpoint groups:
 - Online node query
 - Proxy import from JSON, single URL, multiple URLs, and file upload
 - Proxy query with detailed per-node check records
+
+UI overview includes `Alive Rate = proxy_alive / (proxy_alive + proxy_dead)`.
 
 For concrete request/response examples, check server routes and schemas in:
 - `master_server/api.py`
