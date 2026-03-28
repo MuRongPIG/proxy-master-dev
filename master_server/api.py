@@ -470,10 +470,19 @@ def get_proxies(
     status: str | None = Query(default=None),
     pool_tier: str | None = Query(default=None),
     protocol: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
     limit: int = Query(default=100, ge=0, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[ProxyView]:
-    rows = database.list_proxies(status=status, pool_tier=pool_tier, protocol=protocol, limit=limit, offset=offset)
+    normalized_country = (country_code or "").strip().upper() or None
+    rows = database.list_proxies(
+        status=status,
+        pool_tier=pool_tier,
+        protocol=protocol,
+        country_code=normalized_country,
+        limit=limit,
+        offset=offset,
+    )
     return [ProxyView(**row) for row in rows]
 
 

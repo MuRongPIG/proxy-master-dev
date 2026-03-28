@@ -208,6 +208,7 @@ def init_db() -> None:
         _ensure_scheduler_state(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_proxies_queue_order ON proxies(queue_order)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_proxies_flow_phase ON proxies(flow_phase)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxies_country_code ON proxies(country_code)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_stage_status ON tasks(detect_stage, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_batch_id ON tasks(batch_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_task_uuid ON tasks(task_uuid)")
@@ -1122,7 +1123,14 @@ def _blacklist_and_prune_bad(conn: sqlite3.Connection, now: str) -> None:
     _delete_proxies_by_ids(conn, proxy_ids)
 
 
-def list_proxies(status: Optional[str], pool_tier: Optional[str], protocol: Optional[str], limit: int, offset: int) -> list[dict[str, Any]]:
+def list_proxies(
+    status: Optional[str],
+    pool_tier: Optional[str],
+    protocol: Optional[str],
+    country_code: Optional[str],
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
     conn = _get_conn()
     try:
         where_clauses = []
@@ -1137,6 +1145,9 @@ def list_proxies(status: Optional[str], pool_tier: Optional[str], protocol: Opti
         if protocol:
             where_clauses.append("lower(protocol) = lower(?)")
             params.append(protocol)
+        if country_code:
+            where_clauses.append("upper(country_code) = upper(?)")
+            params.append(country_code)
 
         where_sql = ""
         if where_clauses:
