@@ -447,6 +447,7 @@ def push_result(task_id: str, payload: PushResultRequest) -> dict[str, str]:
         latency_ms=payload.latency_ms,
         response_status=payload.response_status,
         error=payload.error,
+        country_code=payload.country_code,
     )
     if not ok:
         raise HTTPException(status_code=400, detail=message)

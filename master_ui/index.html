@@ -88,6 +88,7 @@
                   <tr>
                     <th>ID</th>
                     <th>代理</th>
+                    <th>国家</th>
                     <th>状态</th>
                     <th>分层</th>
                     <th>延迟</th>
@@ -95,10 +96,11 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="!proxies.length"><td colspan="6">暂无数据</td></tr>
+                  <tr v-if="!proxies.length"><td colspan="7">暂无数据</td></tr>
                   <tr v-for="p in proxies" :key="p.id">
                     <td>{{ p.id }}</td>
                     <td>{{ p.proxy_url }}</td>
+                    <td>{{ p.country_code || '-' }}</td>
                     <td>{{ p.status }}</td>
                     <td>{{ p.pool_tier }}</td>
                     <td>{{ p.latency_ms ?? '-' }}</td>

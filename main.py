@@ -182,7 +182,7 @@ def main() -> None:
 	worker_parser.add_argument("--interval", type=float, default=2.0)
 	worker_parser.add_argument("--timeout", type=float, default=8.0)
 	worker_parser.add_argument("--heartbeat-interval", type=float, default=15.0)
-	worker_parser.add_argument("--target-url", default="https://httpbin.org/ip")
+	worker_parser.add_argument("--target-url", default="https://npmjs.org/cdn-cgi/trace")
 	worker_parser.add_argument("--log-dir", default="")
 	worker_parser.add_argument("--log-level", default="INFO")
 	worker_parser.add_argument("--log-retention-days", type=int, default=14)

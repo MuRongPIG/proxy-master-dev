@@ -46,7 +46,7 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--heartbeat-interval", type=float, default=15.0)
-    parser.add_argument("--target-url", default="https://httpbin.org/ip")
+    parser.add_argument("--target-url", default="https://npmjs.org/cdn-cgi/trace")
     parser.add_argument("--log-dir", default="", help="日志目录；默认 ./logs/worker")
     parser.add_argument("--log-level", default="INFO", help="日志级别：DEBUG/INFO/WARNING/ERROR")
     parser.add_argument("--log-retention-days", type=int, default=14, help="日志保留天数，默认 14")

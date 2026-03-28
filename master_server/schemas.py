@@ -78,6 +78,7 @@ class PushResultRequest(BaseModel):
     latency_ms: Optional[int] = None
     response_status: Optional[int] = None
     error: Optional[str] = None
+    country_code: Optional[str] = None
 
 
 class NodeResultView(BaseModel):
@@ -87,6 +88,7 @@ class NodeResultView(BaseModel):
     latency_ms: Optional[int]
     response_status: Optional[int]
     error: Optional[str]
+    country_code: Optional[str]
     checked_at: str
 
 
@@ -96,6 +98,7 @@ class ProxyView(BaseModel):
     protocol: str
     status: str
     pool_tier: str
+    country_code: Optional[str]
     latency_ms: Optional[int]
     error: Optional[str]
     last_checked_at: Optional[str]

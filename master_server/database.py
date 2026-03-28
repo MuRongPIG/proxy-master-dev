@@ -97,6 +97,7 @@ def init_db() -> None:
                 protocol TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'unknown',
                 pool_tier TEXT NOT NULL DEFAULT 'unknown',
+                country_code TEXT,
                 latency_ms INTEGER,
                 error TEXT,
                 last_checked_at TEXT,
@@ -129,6 +130,7 @@ def init_db() -> None:
                 latency_ms INTEGER,
                 response_status INTEGER,
                 error TEXT,
+                country_code TEXT,
                 checked_at TEXT NOT NULL,
                 FOREIGN KEY (task_id) REFERENCES tasks(id),
                 FOREIGN KEY (proxy_id) REFERENCES proxies(id)
@@ -173,6 +175,8 @@ def init_db() -> None:
         _ensure_column(conn, "tasks", "assigned_worker_id", "TEXT")
         _ensure_column(conn, "tasks", "task_uuid", "TEXT")
         _ensure_column(conn, "proxies", "pool_tier", "TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(conn, "proxies", "country_code", "TEXT")
+        _ensure_column(conn, "check_results", "country_code", "TEXT")
         _normalize_task_uuids(conn)
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_task_uuid ON tasks(task_uuid)")
         conn.commit()
@@ -616,8 +620,15 @@ def submit_result(
     latency_ms: Optional[int],
     response_status: Optional[int],
     error: Optional[str],
+    country_code: Optional[str],
 ) -> tuple[bool, str]:
     now = _utcnow()
+    normalized_country: Optional[str] = None
+    if country_code:
+        maybe = country_code.strip().upper()
+        if len(maybe) == 2 and maybe.isalpha():
+            normalized_country = maybe
+
     conn = _get_conn()
     try:
         with _DB_LOCK:
@@ -654,17 +665,17 @@ def submit_result(
             conn.execute(
                 """
                 UPDATE proxies
-                SET status = ?, latency_ms = ?, error = ?, last_checked_at = ?, updated_at = ?
+                SET status = ?, country_code = COALESCE(?, country_code), latency_ms = ?, error = ?, last_checked_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (proxy_status, latency_ms, error, now, now, task_row["proxy_id"]),
+                (proxy_status, normalized_country, latency_ms, error, now, now, task_row["proxy_id"]),
             )
 
             conn.execute(
                 """
                 INSERT INTO check_results (
-                    task_id, proxy_id, node_name, worker_id, success, latency_ms, response_status, error, checked_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    task_id, proxy_id, node_name, worker_id, success, latency_ms, response_status, error, country_code, checked_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_row["id"],
@@ -675,6 +686,7 @@ def submit_result(
                     latency_ms,
                     response_status,
                     error,
+                    normalized_country,
                     now,
                 ),
             )
@@ -872,7 +884,7 @@ def list_proxies(status: Optional[str], pool_tier: Optional[str], limit: int, of
 
         rows = conn.execute(
             f"""
-            SELECT id, proxy_url, protocol, status, pool_tier, latency_ms, error, last_checked_at, updated_at
+            SELECT id, proxy_url, protocol, status, pool_tier, country_code, latency_ms, error, last_checked_at, updated_at
             FROM proxies
             {where_sql}
             ORDER BY id DESC
@@ -900,7 +912,7 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
     placeholders = ",".join(["?"] * len(proxy_ids))
     rows = conn.execute(
         f"""
-        SELECT r1.proxy_id, r1.node_name, r1.worker_id, r1.success, r1.latency_ms, r1.response_status, r1.error, r1.checked_at
+        SELECT r1.proxy_id, r1.node_name, r1.worker_id, r1.success, r1.latency_ms, r1.response_status, r1.error, r1.country_code, r1.checked_at
         FROM check_results r1
         JOIN (
             SELECT proxy_id, node_name, MAX(id) AS max_id
@@ -924,6 +936,7 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
                 "latency_ms": row["latency_ms"],
                 "response_status": row["response_status"],
                 "error": row["error"],
+                    "country_code": row["country_code"],
                 "checked_at": row["checked_at"],
             }
         )

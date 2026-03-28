@@ -82,6 +82,7 @@ class MasterNodeGateway:
         latency_ms: Optional[int],
         response_status: Optional[int],
         error: Optional[str],
+        country_code: Optional[str],
     ) -> None:
         response = self.session.post(
             f"{self.master_url}/node/push-result/{task_id}",
@@ -92,6 +93,7 @@ class MasterNodeGateway:
                 "latency_ms": latency_ms,
                 "response_status": response_status,
                 "error": error,
+                "country_code": country_code,
             },
             timeout=self.request_timeout,
         )

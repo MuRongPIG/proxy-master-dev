@@ -13,7 +13,7 @@ class DetectorNode:
         gateway: MasterNodeGateway,
         poll_interval: float = 2.0,
         timeout: float = 8.0,
-        target_url: str = "https://httpbin.org/ip",
+        target_url: str = "https://npmjs.org/cdn-cgi/trace",
         heartbeat_interval: float = 15.0,
     ) -> None:
         self.gateway = gateway
@@ -41,19 +41,20 @@ class DetectorNode:
                     time.sleep(self.poll_interval)
                     continue
 
-                success, latency_ms, response_status, error = check_proxy(
+                success, latency_ms, response_status, error, country_code = check_proxy(
                     proxy_url=task["proxy_url"],
                     target_url=self.target_url,
                     timeout=self.timeout,
                 )
-                self.gateway.push_result(task["task_id"], success, latency_ms, response_status, error)
+                self.gateway.push_result(task["task_id"], success, latency_ms, response_status, error, country_code)
                 logger.info(
-                    "任务完成: worker=%s task=%s success=%s latency_ms=%s status=%s",
+                    "任务完成: worker=%s task=%s success=%s latency_ms=%s status=%s country=%s",
                     self.gateway.worker_id,
                     task.get("task_id"),
                     success,
                     latency_ms,
                     response_status,
+                    country_code,
                 )
                 backoff = self.poll_interval
             except requests.RequestException as exc:

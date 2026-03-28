@@ -1,1 +1,4 @@
 /data
+/pool_exports
+proxy_checker.db
+__pycache__

@@ -58,11 +58,22 @@ createApp({
     currentTab() {
       return this.tabs.find((x) => x.key === this.activeTab) || this.tabs[0];
     },
+    aliveRateText() {
+      const alive = Number(this.stats.proxy_alive || 0);
+      const dead = Number(this.stats.proxy_dead || 0);
+      const denominator = alive + dead;
+      if (denominator <= 0) {
+        return "0.00%";
+      }
+      const rate = (alive / denominator) * 100;
+      return `${rate.toFixed(2)}%`;
+    },
     statItems() {
       return [
         { key: "proxy_total", label: "代理总数", value: this.stats.proxy_total },
         { key: "proxy_alive", label: "存活代理", value: this.stats.proxy_alive },
         { key: "proxy_dead", label: "失效代理", value: this.stats.proxy_dead },
+        { key: "proxy_alive_rate", label: "存活率", value: this.aliveRateText },
         { key: "task_pending", label: "待处理任务", value: this.stats.task_pending },
         { key: "task_assigned", label: "已分配任务", value: this.stats.task_assigned },
         { key: "task_done", label: "完成任务", value: this.stats.task_done },
