@@ -923,16 +923,27 @@ def list_proxies(status: Optional[str], pool_tier: Optional[str], limit: int, of
         if where_clauses:
             where_sql = "WHERE " + " AND ".join(where_clauses)
 
-        rows = conn.execute(
-            f"""
-            SELECT id, proxy_url, protocol, status, pool_tier, country_code, latency_ms, error, last_checked_at, updated_at
-            FROM proxies
-            {where_sql}
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (*params, limit, offset),
-        ).fetchall()
+        if limit == 0:
+            rows = conn.execute(
+                f"""
+                SELECT id, proxy_url, protocol, status, pool_tier, country_code, latency_ms, error, last_checked_at, updated_at
+                FROM proxies
+                {where_sql}
+                ORDER BY id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""
+                SELECT id, proxy_url, protocol, status, pool_tier, country_code, latency_ms, error, last_checked_at, updated_at
+                FROM proxies
+                {where_sql}
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, limit, offset),
+            ).fetchall()
 
         proxy_rows = [dict(row) for row in rows]
         proxy_ids = [row["id"] for row in proxy_rows]
@@ -1063,15 +1074,24 @@ def export_alive_proxies_by_tier(export_dir: str) -> dict[str, int]:
 def list_tasks(limit: int, offset: int) -> list[dict[str, Any]]:
     conn = _get_conn()
     try:
-        rows = conn.execute(
-            """
-            SELECT id, task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at, finished_at
-            FROM tasks
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
+        if limit == 0:
+            rows = conn.execute(
+                """
+                SELECT id, task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at, finished_at
+                FROM tasks
+                ORDER BY id DESC
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at, finished_at
+                FROM tasks
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()

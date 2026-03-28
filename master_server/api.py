@@ -384,7 +384,7 @@ async def import_proxies_from_file(
 def get_proxies(
     status: str | None = Query(default=None),
     pool_tier: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=0, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[ProxyView]:
     rows = database.list_proxies(status=status, pool_tier=pool_tier, limit=limit, offset=offset)
@@ -393,7 +393,7 @@ def get_proxies(
 
 @app.get("/tasks", response_model=list[TaskView])
 def get_tasks(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=0, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[TaskView]:
     rows = database.list_tasks(limit=limit, offset=offset)

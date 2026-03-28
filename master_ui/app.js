@@ -48,6 +48,10 @@ createApp({
       proxies: [],
       tasks: [],
       nodes: [],
+      proxyPage: 1,
+      taskPage: 1,
+      proxyHasMore: false,
+      taskHasMore: false,
       logs: [],
       autoTimer: null,
       tierChart: null,
@@ -79,6 +83,12 @@ createApp({
         { key: "task_done", label: "完成任务", value: this.stats.task_done },
         { key: "task_failed", label: "失败任务", value: this.stats.task_failed },
       ];
+    },
+    proxiesPaginationEnabled() {
+      return Number(this.filters.proxyLimit || 0) > 0;
+    },
+    tasksPaginationEnabled() {
+      return Number(this.filters.taskLimit || 0) > 0;
     },
   },
   methods: {
@@ -161,19 +171,79 @@ createApp({
       this.stats = await this.api("GET", "/stats");
     },
     async loadProxies() {
-      this.proxies = await this.api("GET", "/proxies", {
+      const limit = Number(this.filters.proxyLimit || 100);
+      const page = Math.max(1, Number(this.proxyPage || 1));
+      const offset = limit > 0 ? (page - 1) * limit : 0;
+
+      const rows = await this.api("GET", "/proxies", {
         query: {
           status: this.filters.proxyStatus,
           pool_tier: this.filters.proxyTier,
-          limit: Number(this.filters.proxyLimit || 100),
-          offset: 0,
+          limit,
+          offset,
         },
       });
+
+      this.proxies = rows;
+      if (limit > 0) {
+        this.proxyHasMore = rows.length === limit;
+      } else {
+        this.proxyPage = 1;
+        this.proxyHasMore = false;
+      }
     },
     async loadTasks() {
-      this.tasks = await this.api("GET", "/tasks", {
-        query: { limit: Number(this.filters.taskLimit || 100), offset: 0 },
+      const limit = Number(this.filters.taskLimit || 100);
+      const page = Math.max(1, Number(this.taskPage || 1));
+      const offset = limit > 0 ? (page - 1) * limit : 0;
+
+      const rows = await this.api("GET", "/tasks", {
+        query: { limit, offset },
       });
+
+      this.tasks = rows;
+      if (limit > 0) {
+        this.taskHasMore = rows.length === limit;
+      } else {
+        this.taskPage = 1;
+        this.taskHasMore = false;
+      }
+    },
+    async queryProxies() {
+      this.proxyPage = 1;
+      await this.loadProxies();
+    },
+    async queryTasks() {
+      this.taskPage = 1;
+      await this.loadTasks();
+    },
+    async prevProxyPage() {
+      if (!this.proxiesPaginationEnabled || this.proxyPage <= 1) {
+        return;
+      }
+      this.proxyPage -= 1;
+      await this.loadProxies();
+    },
+    async nextProxyPage() {
+      if (!this.proxiesPaginationEnabled || !this.proxyHasMore) {
+        return;
+      }
+      this.proxyPage += 1;
+      await this.loadProxies();
+    },
+    async prevTaskPage() {
+      if (!this.tasksPaginationEnabled || this.taskPage <= 1) {
+        return;
+      }
+      this.taskPage -= 1;
+      await this.loadTasks();
+    },
+    async nextTaskPage() {
+      if (!this.tasksPaginationEnabled || !this.taskHasMore) {
+        return;
+      }
+      this.taskPage += 1;
+      await this.loadTasks();
     },
     async loadNodes() {
       this.nodes = await this.api("GET", "/nodes/online", {

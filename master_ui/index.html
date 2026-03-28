@@ -78,8 +78,8 @@
               <div class="inline-controls">
                 <input v-model.trim="filters.proxyStatus" placeholder="status" />
                 <input v-model.trim="filters.proxyTier" placeholder="pool_tier" />
-                <input v-model.number="filters.proxyLimit" type="number" min="1" max="500" />
-                <button @click="loadProxies">查询</button>
+                <input v-model.number="filters.proxyLimit" type="number" min="0" max="500" />
+                <button @click="queryProxies">查询</button>
               </div>
             </div>
             <div class="table-wrap">
@@ -116,6 +116,12 @@
                 </tbody>
               </table>
             </div>
+            <div class="inline-controls" style="margin-top: 10px;">
+              <button class="secondary" @click="prevProxyPage" :disabled="!proxiesPaginationEnabled || proxyPage <= 1">上一页</button>
+              <span>第 {{ proxiesPaginationEnabled ? proxyPage : 1 }} 页</span>
+              <button class="secondary" @click="nextProxyPage" :disabled="!proxiesPaginationEnabled || !proxyHasMore">下一页</button>
+              <span v-if="!proxiesPaginationEnabled">（limit=0 时返回全部）</span>
+            </div>
           </article>
         </section>
 
@@ -124,8 +130,8 @@
             <div class="panel-head">
               <h3>任务中心</h3>
               <div class="inline-controls">
-                <input v-model.number="filters.taskLimit" type="number" min="1" max="500" />
-                <button @click="loadTasks">查询</button>
+                <input v-model.number="filters.taskLimit" type="number" min="0" max="500" />
+                <button @click="queryTasks">查询</button>
               </div>
             </div>
             <div class="table-wrap">
@@ -152,6 +158,12 @@
                   </tr>
                 </tbody>
               </table>
+            </div>
+            <div class="inline-controls" style="margin-top: 10px;">
+              <button class="secondary" @click="prevTaskPage" :disabled="!tasksPaginationEnabled || taskPage <= 1">上一页</button>
+              <span>第 {{ tasksPaginationEnabled ? taskPage : 1 }} 页</span>
+              <button class="secondary" @click="nextTaskPage" :disabled="!tasksPaginationEnabled || !taskHasMore">下一页</button>
+              <span v-if="!tasksPaginationEnabled">（limit=0 时返回全部）</span>
             </div>
           </article>
         </section>
