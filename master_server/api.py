@@ -269,7 +269,13 @@ def _refresh_proxy_urls_once() -> None:
 
 
 def _expected_token() -> str:
-    return os.getenv("NODE_API_TOKEN", "change-this-token")
+    token = os.getenv("NODE_API_TOKEN", "").strip()
+    if token:
+        return token
+    token = os.getenv("NODE_TOKEN", "").strip()
+    if token:
+        return token
+    return "change-this-token"
 
 
 def verify_node_token(x_node_token: str = Header(default="")) -> None:
@@ -341,26 +347,36 @@ def health() -> dict[str, str]:
 async def ws_dashboard(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token", "").strip()
     expected = _expected_token()
-    if token and token != expected:
+    if token != expected:
         await websocket.close(code=4401)
         return
 
     await websocket.accept()
     push_interval = _ws_push_interval_seconds()
     heartbeat_timeout = 60
+    logger.info("WebSocket 连接已建立，将以 %s 秒间隔推送快照", push_interval)
 
     try:
         while True:
-            snapshot = {
-                "type": "snapshot",
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "stats": database.stats(),
-                "nodes": database.list_active_nodes(heartbeat_timeout_sec=heartbeat_timeout),
-                "alive_protocol_distribution": database.alive_protocol_distribution(),
-            }
-            await websocket.send_json(snapshot)
+            try:
+                snapshot = {
+                    "type": "snapshot",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "stats": database.stats(),
+                    "nodes": database.list_active_nodes(heartbeat_timeout_sec=heartbeat_timeout),
+                    "alive_protocol_distribution": database.alive_protocol_distribution(),
+                }
+                await websocket.send_json(snapshot)
+            except Exception as e:
+                logger.error("WebSocket 快照生成或发送失败: %s", str(e))
+                await asyncio.sleep(1)
+                continue
             await asyncio.sleep(push_interval)
     except WebSocketDisconnect:
+        logger.info("WebSocket 连接已断开")
+        return
+    except Exception as e:
+        logger.error("WebSocket 循环异常: %s", str(e))
         return
 
 

@@ -47,7 +47,7 @@
               <input :value="wsConnected ? 'WebSocket 已连接' : 'WebSocket 重连中'" type="text" readonly />
             </label>
             <label>自动刷新(s)
-              <input v-model.number="cfg.refreshSeconds" type="number" min="5" />
+              <input v-model.number="cfg.refreshSeconds" type="number" min="1" />
             </label>
             <button @click="saveConfig">保存配置</button>
             <button class="secondary" @click="refreshAll">立即刷新</button>

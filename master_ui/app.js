@@ -65,6 +65,7 @@ createApp({
       ws: null,
       wsConnected: false,
       wsReconnectTimer: null,
+      wsShouldReconnect: true,
       tierChart: null,
       taskChart: null,
       protocolChart: null,
@@ -157,7 +158,11 @@ createApp({
         .filter((x) => x.length > 0);
     },
     buildUrl(path, query) {
-      const url = new URL(this.cfg.baseUrl.replace(/\/$/, "") + path);
+      let base = this.cfg.baseUrl.trim().replace(/\/$/, "");
+      if (!/^https?:\/\//i.test(base)) {
+        base = `http://${base}`;
+      }
+      const url = new URL(base + path);
       Object.entries(query || {}).forEach(([k, v]) => {
         if (v === undefined || v === null || v === "") {
           return;
@@ -167,10 +172,13 @@ createApp({
       return url.toString();
     },
     buildWsUrl(path, query) {
-      const base = this.cfg.baseUrl.replace(/\/$/, "");
-      const wsBase = base.startsWith("https://")
-        ? base.replace(/^https:\/\//, "wss://")
-        : base.replace(/^http:\/\//, "ws://");
+      let base = this.cfg.baseUrl.trim().replace(/\/$/, "");
+      if (!/^https?:\/\//i.test(base)) {
+        base = `http://${base}`;
+      }
+      const wsBase = base.toLowerCase().startsWith("https://")
+        ? base.replace(/^https:\/\//i, "wss://")
+        : base.replace(/^http:\/\//i, "ws://");
       const url = new URL(wsBase + path);
       Object.entries(query || {}).forEach(([k, v]) => {
         if (v === undefined || v === null || v === "") {
@@ -210,7 +218,8 @@ createApp({
     },
     saveConfig() {
       this.cfg.baseUrl = this.cfg.baseUrl.trim().replace(/\/$/, "");
-      this.cfg.refreshSeconds = Math.max(5, Number(this.cfg.refreshSeconds || 15));
+      this.cfg.nodeToken = String(this.cfg.nodeToken || "").trim();
+      this.cfg.refreshSeconds = Math.max(1, Number(this.cfg.refreshSeconds || 15));
       localStorage.setItem("master_ui_base_url", this.cfg.baseUrl);
       localStorage.setItem("master_ui_node_token", this.cfg.nodeToken);
       localStorage.setItem("master_ui_refresh_seconds", String(this.cfg.refreshSeconds));
@@ -222,9 +231,10 @@ createApp({
       if (this.autoTimer) {
         clearInterval(this.autoTimer);
       }
-      this.autoTimer = setInterval(() => this.refreshAll(), Math.max(5, this.cfg.refreshSeconds) * 1000);
+      this.autoTimer = setInterval(() => this.refreshAll(), Math.max(1, this.cfg.refreshSeconds) * 1000);
     },
     disconnectWebSocket() {
+      this.wsShouldReconnect = false;
       if (this.wsReconnectTimer) {
         clearTimeout(this.wsReconnectTimer);
         this.wsReconnectTimer = null;
@@ -237,6 +247,7 @@ createApp({
     },
     connectWebSocket() {
       this.disconnectWebSocket();
+      this.wsShouldReconnect = true;
       try {
         const wsUrl = this.buildWsUrl("/ws/dashboard", { token: this.cfg.nodeToken || "" });
         const socket = new WebSocket(wsUrl);
@@ -252,6 +263,7 @@ createApp({
           try {
             payload = JSON.parse(event.data || "{}");
           } catch (_e) {
+            this.log("WebSocket 消息解析失败", { raw: event.data });
             return;
           }
 
@@ -259,8 +271,9 @@ createApp({
             return;
           }
 
+          // 更新实时数据
           if (payload.stats) {
-            this.stats = payload.stats;
+            this.stats = { ...this.stats, ...payload.stats };
           }
           if (Array.isArray(payload.nodes)) {
             this.nodes = payload.nodes;
@@ -269,14 +282,17 @@ createApp({
             this.analytics.aliveProtocolDistribution = payload.alive_protocol_distribution;
           }
 
-          if (this.activeTab === "proxies") {
-            await this.loadProxies();
-          }
-          if (this.activeTab === "tasks") {
-            await this.loadTasks();
-          }
-          if (this.activeTab === "overview") {
-            await this.loadAnalytics();
+          // 仅在当前标签页加载其他数据
+          try {
+            if (this.activeTab === "proxies") {
+              await this.loadProxies();
+            } else if (this.activeTab === "tasks") {
+              await this.loadTasks();
+            } else if (this.activeTab === "overview") {
+              await this.loadAnalytics();
+            }
+          } catch (_e) {
+            // 忽略标签页数据加载失败
           }
 
           await nextTick();
@@ -286,14 +302,18 @@ createApp({
         socket.onclose = () => {
           this.wsConnected = false;
           this.ws = null;
-          this.wsReconnectTimer = setTimeout(() => this.connectWebSocket(), 3000);
+          if (this.wsShouldReconnect) {
+            this.log("WebSocket 连接已关闭，3秒后重连", {});
+            this.wsReconnectTimer = setTimeout(() => this.connectWebSocket(), 3000);
+          }
         };
 
-        socket.onerror = () => {
+        socket.onerror = (event) => {
           this.wsConnected = false;
+          this.log("WebSocket 错误", { error: String(event) });
         };
       } catch (err) {
-        this.log("WebSocket 连接失败", { error: String(err) });
+        this.log("WebSocket 连接初始化失败", { error: String(err) });
       }
     },
     async loadHealth() {
