@@ -93,10 +93,11 @@
                     <th>分层</th>
                     <th>延迟</th>
                     <th>最后检测</th>
+                    <th>节点检测结果</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="!proxies.length"><td colspan="7">暂无数据</td></tr>
+                  <tr v-if="!proxies.length"><td colspan="8">暂无数据</td></tr>
                   <tr v-for="p in proxies" :key="p.id">
                     <td>{{ p.id }}</td>
                     <td>{{ p.proxy_url }}</td>
@@ -105,6 +106,12 @@
                     <td>{{ p.pool_tier }}</td>
                     <td>{{ p.latency_ms ?? '-' }}</td>
                     <td>{{ p.last_checked_at || '-' }}</td>
+                    <td>
+                      <div v-if="!p.node_results || !p.node_results.length">-</div>
+                      <div v-for="r in p.node_results" :key="`${r.node_name}-${r.worker_id}`">
+                        {{ r.node_name }}/{{ r.worker_id }} | {{ r.success ? 'ok' : 'fail' }} | {{ r.latency_ms ?? '-' }}ms | {{ r.country_code || '-' }}
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>

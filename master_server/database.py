@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -25,6 +26,16 @@ def _utcnow() -> str:
 
 def _new_task_uuid() -> str:
     return str(uuid.uuid4())
+
+
+def _extract_region_from_node_name(node_name: str) -> Optional[str]:
+    text = (node_name or "").strip().upper()
+    if not text:
+        return None
+    # Node names are expected to follow AA-node-BB, where AA is region/country code.
+    if len(text) >= 2 and text[0:2].isalpha():
+        return text[0:2]
+    return None
 
 
 def _infer_protocols_from_source(source_hint: Optional[str]) -> list[str]:
@@ -546,10 +557,14 @@ def assign_next_task(node_name: str, worker_id: str) -> Optional[dict[str, Any]]
                 SELECT t.id, t.task_uuid, t.proxy_id, t.attempt, t.max_retries, p.proxy_url, p.protocol
                 FROM tasks t
                 JOIN proxies p ON p.id = t.proxy_id
-                WHERE t.status = 'pending'
+                                WHERE t.status = 'pending'
+                                    AND (t.assigned_to IS NULL OR t.assigned_to = ?)
+                                    AND (t.assigned_worker_id IS NULL OR t.assigned_worker_id = ?)
                 ORDER BY t.id ASC
                 LIMIT 1
                 """
+                                ,
+                                (node_name, worker_id),
             ).fetchone()
 
             if row is None:
@@ -591,7 +606,7 @@ def reclaim_stale_assigned_tasks(timeout_seconds: int = 120) -> int:
             reclaimed = conn.execute(
                 """
                 UPDATE tasks
-                SET status = 'pending', assigned_to = NULL, assigned_worker_id = NULL, assigned_at = NULL
+                SET status = 'pending', assigned_at = NULL
                 WHERE status = 'assigned' AND assigned_at IS NOT NULL AND assigned_at < ?
                 """,
                 (cutoff,),
@@ -694,12 +709,16 @@ def submit_result(
             if not success and task_row["attempt"] < task_row["max_retries"]:
                 conn.execute(
                     """
-                    INSERT INTO tasks (task_uuid, proxy_id, status, attempt, max_retries, created_at)
-                    VALUES (?, ?, 'pending', ?, ?, ?)
+                    INSERT INTO tasks (
+                        task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at
+                    )
+                    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
                     """,
                     (
                         _new_task_uuid(),
                         task_row["proxy_id"],
+                        node_name,
+                        worker_id,
                         task_row["attempt"] + 1,
                         task_row["max_retries"],
                         now,
@@ -816,49 +835,71 @@ def cleanup_failed_proxies(fail_threshold: int = 5) -> int:
 
 
 def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
-    """自动向各在线节点分配检测任务，确保每个代理都被多个节点检测到。"""
+    """每 6 小时为每个代理随机分配到 3 个不同地区的在线 worker。"""
     active_nodes = list_active_nodes()
     if not active_nodes:
         return
 
+    nodes_by_region: dict[str, list[dict[str, Any]]] = {}
+    for node in active_nodes:
+        region = _extract_region_from_node_name(str(node.get("node_name", "")))
+        if not region:
+            continue
+        nodes_by_region.setdefault(region, []).append(node)
+
+    if len(nodes_by_region) < 3:
+        # 地区不足 3 个时按需求跳过本轮分发。
+        return
+
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    six_hours_ago = (now_dt - timedelta(hours=6)).isoformat()
+    candidate_regions = list(nodes_by_region.keys())
+
     conn = _get_conn()
     try:
         with _DB_LOCK:
-            pending_tasks = conn.execute(
-                "SELECT COUNT(*) as count FROM tasks WHERE status = 'pending'"
-            ).fetchone()["count"]
-
-            assigned_tasks = conn.execute(
-                "SELECT COUNT(*) as count FROM tasks WHERE status = 'assigned'"
-            ).fetchone()["count"]
-
-            if pending_tasks + assigned_tasks > 0:
-                return
-
             all_proxies = conn.execute(
-                "SELECT id, proxy_url, protocol FROM proxies ORDER BY RANDOM()"
+                "SELECT id, last_checked_at FROM proxies ORDER BY RANDOM()"
             ).fetchall()
 
-            now = _utcnow()
             for proxy_row in all_proxies:
                 proxy_id = proxy_row["id"]
-                for node_dict in active_nodes:
-                    existing = conn.execute(
-                        """
-                        SELECT COUNT(*) as count FROM tasks
-                        WHERE proxy_id = ? AND assigned_to = ?
-                        """,
-                        (proxy_id, node_dict["node_name"]),
-                    ).fetchone()["count"]
 
-                    if existing == 0:
-                        conn.execute(
-                            """
-                            INSERT INTO tasks (task_uuid, proxy_id, status, attempt, max_retries, created_at)
-                            VALUES (?, ?, 'pending', 0, 2, ?)
-                            """,
-                            (_new_task_uuid(), proxy_id, now),
+                # 当前代理有未完成任务时跳过，避免重复堆积。
+                in_flight = conn.execute(
+                    """
+                    SELECT 1 FROM tasks
+                    WHERE proxy_id = ? AND status IN ('pending', 'assigned')
+                    LIMIT 1
+                    """,
+                    (proxy_id,),
+                ).fetchone()
+                if in_flight:
+                    continue
+
+                last_checked_at = proxy_row["last_checked_at"]
+                if last_checked_at and last_checked_at >= six_hours_ago:
+                    continue
+
+                selected_regions = random.sample(candidate_regions, 3)
+                for region in selected_regions:
+                    selected_node = random.choice(nodes_by_region[region])
+                    conn.execute(
+                        """
+                        INSERT INTO tasks (
+                            task_uuid, proxy_id, status, assigned_to, assigned_worker_id, attempt, max_retries, created_at
                         )
+                        VALUES (?, ?, 'pending', ?, ?, 0, 2, ?)
+                        """,
+                        (
+                            _new_task_uuid(),
+                            proxy_id,
+                            selected_node["node_name"],
+                            selected_node["worker_id"],
+                            now,
+                        ),
+                    )
 
             conn.commit()
     finally:
@@ -915,12 +956,12 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
         SELECT r1.proxy_id, r1.node_name, r1.worker_id, r1.success, r1.latency_ms, r1.response_status, r1.error, r1.country_code, r1.checked_at
         FROM check_results r1
         JOIN (
-            SELECT proxy_id, node_name, MAX(id) AS max_id
+            SELECT proxy_id, node_name, worker_id, MAX(id) AS max_id
             FROM check_results
             WHERE proxy_id IN ({placeholders})
-            GROUP BY proxy_id, node_name
+            GROUP BY proxy_id, node_name, worker_id
         ) latest ON latest.max_id = r1.id
-        ORDER BY r1.proxy_id ASC, r1.node_name ASC
+        ORDER BY r1.proxy_id ASC, r1.node_name ASC, r1.worker_id ASC
         """,
         proxy_ids,
     ).fetchall()
@@ -936,7 +977,7 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
                 "latency_ms": row["latency_ms"],
                 "response_status": row["response_status"],
                 "error": row["error"],
-                    "country_code": row["country_code"],
+                "country_code": row["country_code"],
                 "checked_at": row["checked_at"],
             }
         )
