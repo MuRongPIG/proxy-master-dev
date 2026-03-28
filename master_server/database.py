@@ -537,20 +537,35 @@ def assign_next_task(node_name: str, worker_id: str) -> Optional[dict[str, Any]]
     try:
         with _DB_LOCK:
             conn.execute("BEGIN IMMEDIATE")
+            # 先取精准绑定任务；取不到时允许同节点 worker 兜底领取，避免单 worker 堵塞导致 pending 长期堆积。
             row = conn.execute(
                 """
                 SELECT t.id, t.task_uuid, t.proxy_id, t.attempt, t.max_retries, p.proxy_url, p.protocol
                 FROM tasks t
                 JOIN proxies p ON p.id = t.proxy_id
-                                WHERE t.status = 'pending'
-                                    AND t.assigned_to = ?
-                                    AND t.assigned_worker_id = ?
+                WHERE t.status = 'pending'
+                  AND t.assigned_to = ?
+                  AND t.assigned_worker_id = ?
                 ORDER BY t.id ASC
                 LIMIT 1
                 """
-                                ,
-                                (node_name, worker_id),
+                ,
+                (node_name, worker_id),
             ).fetchone()
+
+            if row is None:
+                row = conn.execute(
+                    """
+                    SELECT t.id, t.task_uuid, t.proxy_id, t.attempt, t.max_retries, p.proxy_url, p.protocol
+                    FROM tasks t
+                    JOIN proxies p ON p.id = t.proxy_id
+                    WHERE t.status = 'pending'
+                      AND t.assigned_to = ?
+                    ORDER BY t.id ASC
+                    LIMIT 1
+                    """,
+                    (node_name,),
+                ).fetchone()
 
             if row is None:
                 conn.commit()
@@ -591,7 +606,7 @@ def reclaim_stale_assigned_tasks(timeout_seconds: int = 120) -> int:
             reclaimed = conn.execute(
                 """
                 UPDATE tasks
-                SET status = 'pending', assigned_at = NULL
+                SET status = 'pending', assigned_at = NULL, assigned_worker_id = NULL
                 WHERE status = 'assigned' AND assigned_at IS NOT NULL AND assigned_at < ?
                 """,
                 (cutoff,),
