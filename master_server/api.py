@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from master_server import database
 from master_server.schemas import (
+    AliveProtocolDistributionResponse,
     AllocateNodeNameRequest,
     AllocateNodeNameResponse,
     HeartbeatRequest,
@@ -20,7 +21,9 @@ from master_server.schemas import (
     ImportProxiesRequest,
     ImportProxiesResponse,
     NodeInfoView,
+    PoolTierTrendPoint,
     ProxyView,
+    ProtocolDistributionItem,
     PullTaskRequest,
     PullTaskResponse,
     PushResultRequest,
@@ -428,6 +431,19 @@ def get_tasks(
 @app.get("/stats", response_model=StatsResponse)
 def get_stats() -> StatsResponse:
     return StatsResponse(**database.stats())
+
+
+@app.get("/analytics/pool-tier-trend", response_model=list[PoolTierTrendPoint])
+def get_pool_tier_trend(days: int = Query(default=14, ge=1, le=180)) -> list[PoolTierTrendPoint]:
+    rows = database.pool_tier_trend(days=days)
+    return [PoolTierTrendPoint(**row) for row in rows]
+
+
+@app.get("/analytics/alive-protocol-distribution", response_model=AliveProtocolDistributionResponse)
+def get_alive_protocol_distribution() -> AliveProtocolDistributionResponse:
+    payload = database.alive_protocol_distribution()
+    distribution = [ProtocolDistributionItem(**item) for item in payload.get("distribution", [])]
+    return AliveProtocolDistributionResponse(total_alive=int(payload.get("total_alive", 0)), distribution=distribution)
 
 
 @app.post("/pool/recalculate")

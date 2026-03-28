@@ -127,3 +127,22 @@ class StatsResponse(BaseModel):
     task_assigned: int
     task_done: int
     task_failed: int
+
+
+class PoolTierTrendPoint(BaseModel):
+    date: str
+    excellent: int
+    good: int
+    bad: int
+    unknown: int
+    total_checked: int
+
+
+class ProtocolDistributionItem(BaseModel):
+    protocol: str
+    count: int
+
+
+class AliveProtocolDistributionResponse(BaseModel):
+    total_alive: int
+    distribution: list[ProtocolDistributionItem]

@@ -48,6 +48,13 @@ createApp({
         task_done: 0,
         task_failed: 0,
       },
+      analytics: {
+        poolTierTrend: [],
+        aliveProtocolDistribution: {
+          total_alive: 0,
+          distribution: [],
+        },
+      },
       proxies: [],
       tasks: [],
       nodes: [],
@@ -126,22 +133,12 @@ createApp({
       return rows;
     },
     protocolSeriesData() {
-      const counts = { http: 0, https: 0, socks4: 0, socks5: 0, unknown: 0 };
-      this.proxies.forEach((p) => {
-        const protocol = String(p.protocol || "").toLowerCase();
-        if (Object.prototype.hasOwnProperty.call(counts, protocol)) {
-          counts[protocol] += 1;
-        } else {
-          counts.unknown += 1;
-        }
-      });
-      return [
-        { name: "http", value: counts.http },
-        { name: "https", value: counts.https },
-        { name: "socks4", value: counts.socks4 },
-        { name: "socks5", value: counts.socks5 },
-        { name: "unknown", value: counts.unknown },
-      ];
+      const rows = Array.isArray(this.analytics.aliveProtocolDistribution.distribution)
+        ? this.analytics.aliveProtocolDistribution.distribution
+        : [];
+      const names = ["http", "https", "socks4", "socks5", "unknown"];
+      const map = new Map(rows.map((x) => [String(x.protocol || "unknown").toLowerCase(), Number(x.count || 0)]));
+      return names.map((name) => ({ name, value: map.get(name) || 0 }));
     },
   },
   methods: {
@@ -222,6 +219,17 @@ createApp({
     },
     async loadStats() {
       this.stats = await this.api("GET", "/stats");
+    },
+    async loadAnalytics() {
+      const [poolTierTrend, aliveProtocolDistribution] = await Promise.all([
+        this.api("GET", "/analytics/pool-tier-trend", { query: { days: 14 } }),
+        this.api("GET", "/analytics/alive-protocol-distribution"),
+      ]);
+      this.analytics.poolTierTrend = Array.isArray(poolTierTrend) ? poolTierTrend : [];
+      this.analytics.aliveProtocolDistribution = aliveProtocolDistribution || {
+        total_alive: 0,
+        distribution: [],
+      };
     },
     async loadProxies() {
       const rawLimit = this.filters.proxyLimit;
@@ -315,9 +323,11 @@ createApp({
     async refreshAll() {
       try {
         await this.loadHealth();
-        await Promise.all([this.loadStats(), this.loadProxies(), this.loadTasks(), this.loadNodes()]);
+        await Promise.all([this.loadStats(), this.loadAnalytics(), this.loadProxies(), this.loadTasks(), this.loadNodes()]);
         this.log("刷新成功", {
           stats: this.stats,
+          trend_points: this.analytics.poolTierTrend.length,
+          alive_protocol_total: this.analytics.aliveProtocolDistribution.total_alive,
           proxies: this.proxies.length,
           tasks: this.tasks.length,
           nodes: this.nodes.length,
@@ -329,27 +339,45 @@ createApp({
       }
     },
     renderCharts() {
-      const tierCount = { excellent: 0, good: 0, bad: 0, unknown: 0 };
-      this.proxies.forEach((p) => {
-        const key = p.pool_tier || "unknown";
-        tierCount[key] = (tierCount[key] || 0) + 1;
-      });
+      const trend = Array.isArray(this.analytics.poolTierTrend) ? this.analytics.poolTierTrend : [];
+      const labels = trend.map((x) => x.date || "");
+      const excellentData = trend.map((x) => Number(x.excellent || 0));
+      const goodData = trend.map((x) => Number(x.good || 0));
+      const badData = trend.map((x) => Number(x.bad || 0));
+      const unknownData = trend.map((x) => Number(x.unknown || 0));
 
       if (!this.tierChart) {
         this.tierChart = echarts.init(document.getElementById("tierChart"));
       }
       this.tierChart.setOption({
-        tooltip: { trigger: "item" },
+        tooltip: { trigger: "axis" },
+        legend: { top: 0 },
+        xAxis: { type: "category", data: labels },
+        yAxis: { type: "value" },
         series: [
           {
-            type: "pie",
-            radius: ["35%", "68%"],
-            data: [
-              { name: "excellent", value: tierCount.excellent },
-              { name: "good", value: tierCount.good },
-              { name: "bad", value: tierCount.bad },
-              { name: "unknown", value: tierCount.unknown },
-            ],
+            name: "excellent",
+            type: "line",
+            smooth: true,
+            data: excellentData,
+          },
+          {
+            name: "good",
+            type: "line",
+            smooth: true,
+            data: goodData,
+          },
+          {
+            name: "bad",
+            type: "line",
+            smooth: true,
+            data: badData,
+          },
+          {
+            name: "unknown",
+            type: "line",
+            smooth: true,
+            data: unknownData,
           },
         ],
       });

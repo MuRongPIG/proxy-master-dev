@@ -1203,3 +1203,89 @@ def stats() -> dict[str, int]:
         }
     finally:
         conn.close()
+
+
+def pool_tier_trend(days: int = 14) -> list[dict[str, Any]]:
+    day_count = max(1, min(180, int(days)))
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=day_count - 1)
+    start_iso = start_date.isoformat()
+
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT substr(cr.checked_at, 1, 10) AS day,
+                   CASE
+                     WHEN lower(COALESCE(p.pool_tier, 'unknown')) IN ('excellent', 'good', 'bad')
+                     THEN lower(p.pool_tier)
+                     ELSE 'unknown'
+                   END AS tier,
+                   COUNT(DISTINCT cr.proxy_id) AS cnt
+            FROM check_results cr
+            JOIN proxies p ON p.id = cr.proxy_id
+            WHERE substr(cr.checked_at, 1, 10) >= ?
+            GROUP BY day, tier
+            ORDER BY day ASC
+            """,
+            (start_iso,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    daily: dict[str, dict[str, int]] = {}
+    for row in rows:
+        day = str(row["day"])
+        tier = str(row["tier"])
+        cnt = int(row["cnt"] or 0)
+        bucket = daily.setdefault(day, {"excellent": 0, "good": 0, "bad": 0, "unknown": 0})
+        bucket[tier] = bucket.get(tier, 0) + cnt
+
+    result: list[dict[str, Any]] = []
+    for i in range(day_count):
+        current_day = (start_date + timedelta(days=i)).isoformat()
+        bucket = daily.get(current_day, {"excellent": 0, "good": 0, "bad": 0, "unknown": 0})
+        total_checked = int(bucket["excellent"] + bucket["good"] + bucket["bad"] + bucket["unknown"])
+        result.append(
+            {
+                "date": current_day,
+                "excellent": int(bucket["excellent"]),
+                "good": int(bucket["good"]),
+                "bad": int(bucket["bad"]),
+                "unknown": int(bucket["unknown"]),
+                "total_checked": total_checked,
+            }
+        )
+
+    return result
+
+
+def alive_protocol_distribution() -> dict[str, Any]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT lower(COALESCE(protocol, 'unknown')) AS protocol, COUNT(1) AS cnt
+            FROM proxies
+            WHERE status = 'alive'
+            GROUP BY lower(COALESCE(protocol, 'unknown'))
+            ORDER BY cnt DESC, protocol ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    known_protocols = ["http", "https", "socks4", "socks5", "unknown"]
+    counter: dict[str, int] = {name: 0 for name in known_protocols}
+
+    for row in rows:
+        protocol = str(row["protocol"] or "unknown")
+        count = int(row["cnt"] or 0)
+        if protocol not in counter:
+            counter["unknown"] += count
+        else:
+            counter[protocol] += count
+
+    distribution = [{"protocol": name, "count": int(counter[name])} for name in known_protocols]
+    total_alive = sum(item["count"] for item in distribution)
+    return {"total_alive": int(total_alive), "distribution": distribution}

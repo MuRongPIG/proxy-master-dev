@@ -194,8 +194,11 @@ Main endpoint groups:
 - Online node query
 - Proxy import from JSON, single URL, multiple URLs, and file upload
 - Proxy query with detailed per-node check records
+- Pool-tier trend analytics for all checked proxies: `GET /analytics/pool-tier-trend?days=14`
+- Alive proxy protocol distribution analytics: `GET /analytics/alive-protocol-distribution`
 
 UI overview includes `Alive Rate = proxy_alive / (proxy_alive + proxy_dead)`.
+UI charts now use analytics endpoints for full-range data (not affected by proxy list pagination/filtering).
 
 For concrete request/response examples, check server routes and schemas in:
 - `master_server/api.py`

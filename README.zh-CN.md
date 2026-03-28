@@ -496,6 +496,50 @@ socks5://9.9.9.9:1080
 }
 ```
 
+### 8.1 查询检测代理分层趋势
+
+- 方法路径：GET /analytics/pool-tier-trend?days=14
+- 参数说明：
+  - `days`：查询天数，范围 1~180，默认 14
+- 请求体：无
+- 响应 200
+
+```json
+[
+  {
+    "date": "2026-03-20",
+    "excellent": 125,
+    "good": 238,
+    "bad": 91,
+    "unknown": 17,
+    "total_checked": 471
+  }
+]
+```
+
+说明：按“当日有检测记录的代理”聚合统计，返回 excellent/good/bad/unknown 四类趋势。
+
+### 8.2 查询全部可用代理类型分布
+
+- 方法路径：GET /analytics/alive-protocol-distribution
+- 请求体：无
+- 响应 200
+
+```json
+{
+  "total_alive": 560,
+  "distribution": [
+    {"protocol": "http", "count": 150},
+    {"protocol": "https", "count": 210},
+    {"protocol": "socks4", "count": 60},
+    {"protocol": "socks5", "count": 140},
+    {"protocol": "unknown", "count": 0}
+  ]
+}
+```
+
+说明：基于 `status=alive` 的全量代理统计，不受分页或前端筛选影响。
+
 ### 9. 手动重算代理池等级
 
 - 方法路径：POST /pool/recalculate
