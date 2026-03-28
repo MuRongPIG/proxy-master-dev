@@ -12,6 +12,7 @@ services:
       DB_PATH: /data/proxy_checker.db
       BOOTSTRAP_PROXY_URL_FILE: master_server/bootstrap_proxy_urls.txt
       URL_REFRESH_INTERVAL_SECONDS: 10800
+      DISPATCH_INTERVAL_SECONDS: 60
       BOOTSTRAP_MAX_RETRIES: 2
       POOL_EXPORT_DIR: /data/pool_exports
       POOL_EXPORT_INTERVAL_SECONDS: 300

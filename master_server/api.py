@@ -277,7 +277,8 @@ def on_startup() -> None:
     database.reset_detection_flow()
     _export_pool_once()
     _start_background_tasks()
-    logger.info("master 启动完成")
+    dispatch_sec = _dispatch_interval_seconds()
+    logger.info("master 启动完成，自动分发间隔 %d 秒，任务将每 %d 秒自动分配一次", dispatch_sec, dispatch_sec)
 
 
 def _background_task_loop() -> None:
@@ -295,6 +296,14 @@ def _background_task_loop() -> None:
     last_dispatch = start_ts - dispatch_interval
     last_url_refresh = start_ts - url_refresh_interval + refresh_stagger
     last_pool_export = start_ts - pool_export_interval
+
+    logger.info(
+        "后台调度循环已启动: dispatch_interval=%d秒, url_refresh_interval=%d秒, stagger=%d秒, pool_export_interval=%d秒",
+        dispatch_interval,
+        url_refresh_interval,
+        refresh_stagger,
+        pool_export_interval,
+    )
 
     while True:
         try:

@@ -20,6 +20,7 @@ ENV HOST=0.0.0.0 \
     BOOTSTRAP_PROXY_URLS= \
     BOOTSTRAP_PROXY_URL_FILE=master_server/bootstrap_proxy_urls.txt \
     URL_REFRESH_INTERVAL_SECONDS=300 \
+    DISPATCH_INTERVAL_SECONDS=60 \
     BOOTSTRAP_MAX_RETRIES=2 \
     POOL_EXPORT_DIR=/data/pool_exports \
     POOL_EXPORT_INTERVAL_SECONDS=300 \
@@ -28,4 +29,4 @@ ENV HOST=0.0.0.0 \
     LOG_RETENTION_DAYS=14 \
     UI_CORS_ORIGINS=*
 
-CMD ["sh", "-c", "python -m master_server.main --host ${HOST} --port ${PORT} --db-path ${DB_PATH} --bootstrap-proxy-files \"${BOOTSTRAP_PROXY_FILES}\" --bootstrap-proxy-urls \"${BOOTSTRAP_PROXY_URLS}\" --bootstrap-proxy-url-file \"${BOOTSTRAP_PROXY_URL_FILE}\" --url-refresh-interval-seconds ${URL_REFRESH_INTERVAL_SECONDS} --bootstrap-max-retries ${BOOTSTRAP_MAX_RETRIES} --pool-export-dir \"${POOL_EXPORT_DIR}\" --pool-export-interval-seconds ${POOL_EXPORT_INTERVAL_SECONDS} --log-dir \"${LOG_DIR}\" --log-level ${LOG_LEVEL} --log-retention-days ${LOG_RETENTION_DAYS} --ui-cors-origins \"${UI_CORS_ORIGINS}\""]
+CMD ["sh", "-c", "python -m master_server.main --host ${HOST} --port ${PORT} --db-path ${DB_PATH} --bootstrap-proxy-files \"${BOOTSTRAP_PROXY_FILES}\" --bootstrap-proxy-urls \"${BOOTSTRAP_PROXY_URLS}\" --bootstrap-proxy-url-file \"${BOOTSTRAP_PROXY_URL_FILE}\" --url-refresh-interval-seconds ${URL_REFRESH_INTERVAL_SECONDS} --dispatch-interval-seconds ${DISPATCH_INTERVAL_SECONDS} --bootstrap-max-retries ${BOOTSTRAP_MAX_RETRIES} --pool-export-dir \"${POOL_EXPORT_DIR}\" --pool-export-interval-seconds ${POOL_EXPORT_INTERVAL_SECONDS} --log-dir \"${LOG_DIR}\" --log-level ${LOG_LEVEL} --log-retention-days ${LOG_RETENTION_DAYS} --ui-cors-origins \"${UI_CORS_ORIGINS}\""]

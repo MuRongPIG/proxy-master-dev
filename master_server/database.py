@@ -972,7 +972,7 @@ def _dispatch_from_phase(
 
         proxy_id = int(proxy_row["id"])
         if _proxy_has_inflight(conn, proxy_id):
-            break
+            continue
 
         workers = _pick_three_workers(active_nodes)
         if workers is None:
@@ -1032,7 +1032,7 @@ def _dispatch_monitor(
 
         proxy_id = int(proxy_row["id"])
         if _proxy_has_inflight(conn, proxy_id):
-            break
+            continue
 
         workers = _pick_three_workers(active_nodes)
         if workers is None:

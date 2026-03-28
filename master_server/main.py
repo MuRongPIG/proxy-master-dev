@@ -27,6 +27,7 @@ def main() -> None:
         help="包含代理 URL 列表的本地文件（每行一个 URL）",
     )
     parser.add_argument("--url-refresh-interval-seconds", type=int, default=300, help="定时从 URL 刷新代理的间隔秒数")
+    parser.add_argument("--dispatch-interval-seconds", type=int, default=60, help="自动分发任务的间隔秒数，最小 10")
     parser.add_argument("--bootstrap-max-retries", type=int, default=2, help="自动导入任务的最大重试次数")
     parser.add_argument("--pool-export-dir", default="", help="代理池导出目录；默认 db-path 同目录下的 pool_exports")
     parser.add_argument("--pool-export-interval-seconds", type=int, default=300, help="代理池导出间隔秒数，最小 30")
@@ -50,6 +51,7 @@ def main() -> None:
     os.environ["MASTER_BOOTSTRAP_PROXY_URLS"] = args.bootstrap_proxy_urls
     os.environ["MASTER_BOOTSTRAP_PROXY_URL_FILE"] = args.bootstrap_proxy_url_file
     os.environ["MASTER_URL_REFRESH_INTERVAL_SECONDS"] = str(args.url_refresh_interval_seconds)
+    os.environ["MASTER_DISPATCH_INTERVAL_SECONDS"] = str(max(10, args.dispatch_interval_seconds))
     os.environ["MASTER_BOOTSTRAP_MAX_RETRIES"] = str(args.bootstrap_max_retries)
     os.environ["MASTER_POOL_EXPORT_DIR"] = args.pool_export_dir
     os.environ["MASTER_POOL_EXPORT_INTERVAL_SECONDS"] = str(args.pool_export_interval_seconds)
