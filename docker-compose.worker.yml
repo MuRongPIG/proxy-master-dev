@@ -6,13 +6,8 @@ services:
     container_name: proxy-worker
     restart: unless-stopped
     environment:
-<<<<<<< Updated upstream
       MASTER_URL: localhost:62071
       NODE_TOKEN: murongpig
-=======
-      MASTER_URL: ${MASTER_URL:-http://host.docker.internal:62071}
-      NODE_TOKEN: ${NODE_TOKEN:-my-secret-token}
->>>>>>> Stashed changes
       WORKER_ID: worker
       WORKER_COUNT: 4
       INTERVAL: 2
