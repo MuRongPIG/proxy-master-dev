@@ -458,43 +458,17 @@ def import_proxies(proxy_urls: list[str], max_retries: int) -> tuple[int, int]:
                         if not expanded_normalized:
                             continue
                         proxy_url, protocol = expanded_normalized
-                        conn.execute(
+                        cursor = conn.execute(
                             """
                             INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, created_at, updated_at)
                             VALUES (?, ?, 'unknown', ?, ?)
                             """,
                             (proxy_url, protocol, now, now),
                         )
-
-                        row = conn.execute(
-                            "SELECT id FROM proxies WHERE proxy_url = ?",
-                            (proxy_url,),
-                        ).fetchone()
-                        if row is None:
+                        if cursor.rowcount > 0:
+                            imported += 1
+                        else:
                             ignored += 1
-                            continue
-
-                        proxy_id = row["id"]
-                        active_task = conn.execute(
-                            """
-                            SELECT 1 FROM tasks
-                            WHERE proxy_id = ? AND status IN ('pending', 'assigned')
-                            LIMIT 1
-                            """,
-                            (proxy_id,),
-                        ).fetchone()
-                        if active_task:
-                            ignored += 1
-                            continue
-
-                        conn.execute(
-                            """
-                            INSERT INTO tasks (task_uuid, proxy_id, status, attempt, max_retries, created_at)
-                            VALUES (?, ?, 'pending', 0, ?, ?)
-                            """,
-                            (_new_task_uuid(), proxy_id, max_retries, now),
-                        )
-                        imported += 1
                     continue
 
                 if not normalized:
@@ -502,43 +476,17 @@ def import_proxies(proxy_urls: list[str], max_retries: int) -> tuple[int, int]:
                     continue
 
                 proxy_url, protocol = normalized
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO proxies (proxy_url, protocol, status, created_at, updated_at)
                     VALUES (?, ?, 'unknown', ?, ?)
                     """,
                     (proxy_url, protocol, now, now),
                 )
-
-                row = conn.execute(
-                    "SELECT id FROM proxies WHERE proxy_url = ?",
-                    (proxy_url,),
-                ).fetchone()
-                if row is None:
+                if cursor.rowcount > 0:
+                    imported += 1
+                else:
                     ignored += 1
-                    continue
-
-                proxy_id = row["id"]
-                active_task = conn.execute(
-                    """
-                    SELECT 1 FROM tasks
-                    WHERE proxy_id = ? AND status IN ('pending', 'assigned')
-                    LIMIT 1
-                    """,
-                    (proxy_id,),
-                ).fetchone()
-                if active_task:
-                    ignored += 1
-                    continue
-
-                conn.execute(
-                    """
-                    INSERT INTO tasks (task_uuid, proxy_id, status, attempt, max_retries, created_at)
-                    VALUES (?, ?, 'pending', 0, ?, ?)
-                    """,
-                    (_new_task_uuid(), proxy_id, max_retries, now),
-                )
-                imported += 1
 
             conn.commit()
         return imported, ignored
@@ -558,8 +506,8 @@ def assign_next_task(node_name: str, worker_id: str) -> Optional[dict[str, Any]]
                 FROM tasks t
                 JOIN proxies p ON p.id = t.proxy_id
                                 WHERE t.status = 'pending'
-                                    AND (t.assigned_to IS NULL OR t.assigned_to = ?)
-                                    AND (t.assigned_worker_id IS NULL OR t.assigned_worker_id = ?)
+                                    AND t.assigned_to = ?
+                                    AND t.assigned_worker_id = ?
                 ORDER BY t.id ASC
                 LIMIT 1
                 """
@@ -871,6 +819,8 @@ def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
                     """
                     SELECT 1 FROM tasks
                     WHERE proxy_id = ? AND status IN ('pending', 'assigned')
+                      AND assigned_to IS NOT NULL
+                      AND assigned_worker_id IS NOT NULL
                     LIMIT 1
                     """,
                     (proxy_id,),

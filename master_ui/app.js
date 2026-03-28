@@ -17,9 +17,12 @@ createApp({
         refreshSeconds: Number(localStorage.getItem("master_ui_refresh_seconds") || "15"),
       },
       filters: {
-        proxyStatus: "",
+        proxyStatus: "alive",
         proxyTier: "",
+        proxyProtocol: "",
         proxyLimit: 100,
+        proxySortBy: "id",
+        proxySortOrder: "desc",
         taskLimit: 100,
         heartbeatTimeout: 60,
       },
@@ -56,6 +59,7 @@ createApp({
       autoTimer: null,
       tierChart: null,
       taskChart: null,
+      protocolChart: null,
     };
   },
   computed: {
@@ -89,6 +93,55 @@ createApp({
     },
     tasksPaginationEnabled() {
       return Number(this.filters.taskLimit || 0) > 0;
+    },
+    sortedProxies() {
+      const key = this.filters.proxySortBy || "id";
+      const order = (this.filters.proxySortOrder || "desc").toLowerCase() === "asc" ? 1 : -1;
+      const rows = [...this.proxies];
+
+      const normalize = (row) => {
+        if (key === "id" || key === "latency_ms") {
+          const v = Number(row[key]);
+          return Number.isFinite(v) ? v : -1;
+        }
+        if (key === "last_checked_at") {
+          const t = Date.parse(row.last_checked_at || "");
+          return Number.isFinite(t) ? t : 0;
+        }
+        return String(row[key] ?? "").toLowerCase();
+      };
+
+      rows.sort((a, b) => {
+        const va = normalize(a);
+        const vb = normalize(b);
+        if (va < vb) {
+          return -1 * order;
+        }
+        if (va > vb) {
+          return 1 * order;
+        }
+        return 0;
+      });
+
+      return rows;
+    },
+    protocolSeriesData() {
+      const counts = { http: 0, https: 0, socks4: 0, socks5: 0, unknown: 0 };
+      this.proxies.forEach((p) => {
+        const protocol = String(p.protocol || "").toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(counts, protocol)) {
+          counts[protocol] += 1;
+        } else {
+          counts.unknown += 1;
+        }
+      });
+      return [
+        { name: "http", value: counts.http },
+        { name: "https", value: counts.https },
+        { name: "socks4", value: counts.socks4 },
+        { name: "socks5", value: counts.socks5 },
+        { name: "unknown", value: counts.unknown },
+      ];
     },
   },
   methods: {
@@ -171,7 +224,11 @@ createApp({
       this.stats = await this.api("GET", "/stats");
     },
     async loadProxies() {
-      const limit = Number(this.filters.proxyLimit || 100);
+      const rawLimit = this.filters.proxyLimit;
+      const parsedLimit = Number(rawLimit);
+      const limit = rawLimit === "" || rawLimit === null || rawLimit === undefined || !Number.isFinite(parsedLimit)
+        ? 100
+        : Math.max(0, parsedLimit);
       const page = Math.max(1, Number(this.proxyPage || 1));
       const offset = limit > 0 ? (page - 1) * limit : 0;
 
@@ -179,6 +236,7 @@ createApp({
         query: {
           status: this.filters.proxyStatus,
           pool_tier: this.filters.proxyTier,
+          protocol: this.filters.proxyProtocol,
           limit,
           offset,
         },
@@ -193,7 +251,11 @@ createApp({
       }
     },
     async loadTasks() {
-      const limit = Number(this.filters.taskLimit || 100);
+      const rawLimit = this.filters.taskLimit;
+      const parsedLimit = Number(rawLimit);
+      const limit = rawLimit === "" || rawLimit === null || rawLimit === undefined || !Number.isFinite(parsedLimit)
+        ? 100
+        : Math.max(0, parsedLimit);
       const page = Math.max(1, Number(this.taskPage || 1));
       const offset = limit > 0 ? (page - 1) * limit : 0;
 
@@ -316,6 +378,22 @@ createApp({
           },
         ],
       });
+
+      if (!this.protocolChart) {
+        this.protocolChart = echarts.init(document.getElementById("protocolChart"));
+      }
+      this.protocolChart.setOption({
+        tooltip: { trigger: "item" },
+        legend: { top: 0 },
+        series: [
+          {
+            type: "pie",
+            radius: ["35%", "68%"],
+            center: ["50%", "56%"],
+            data: this.protocolSeriesData,
+          },
+        ],
+      });
     },
     onFileChange(event) {
       const files = event.target.files;
@@ -404,6 +482,9 @@ createApp({
       if (this.taskChart) {
         this.taskChart.resize();
       }
+      if (this.protocolChart) {
+        this.protocolChart.resize();
+      }
     });
   },
   beforeUnmount() {
@@ -415,6 +496,9 @@ createApp({
     }
     if (this.taskChart) {
       this.taskChart.dispose();
+    }
+    if (this.protocolChart) {
+      this.protocolChart.dispose();
     }
   },
 }).mount("#app");

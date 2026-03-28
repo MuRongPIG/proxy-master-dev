@@ -233,6 +233,10 @@ button:hover {
   margin-top: 12px;
 }
 
+.overview-grid {
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);

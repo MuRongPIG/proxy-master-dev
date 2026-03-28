@@ -68,6 +68,10 @@
               <h3>任务状态分布</h3>
               <div id="taskChart" class="chart-box"></div>
             </article>
+            <article class="panel">
+              <h3>代理类型分布</h3>
+              <div id="protocolChart" class="chart-box"></div>
+            </article>
           </div>
         </section>
 
@@ -78,7 +82,26 @@
               <div class="inline-controls">
                 <input v-model.trim="filters.proxyStatus" placeholder="status" />
                 <input v-model.trim="filters.proxyTier" placeholder="pool_tier" />
+                <select v-model="filters.proxyProtocol">
+                  <option value="">全部协议</option>
+                  <option value="http">http</option>
+                  <option value="https">https</option>
+                  <option value="socks4">socks4</option>
+                  <option value="socks5">socks5</option>
+                </select>
                 <input v-model.number="filters.proxyLimit" type="number" min="0" max="500" />
+                <select v-model="filters.proxySortBy">
+                  <option value="id">按ID</option>
+                  <option value="status">按状态</option>
+                  <option value="pool_tier">按分层</option>
+                  <option value="country_code">按国家</option>
+                  <option value="latency_ms">按延迟</option>
+                  <option value="last_checked_at">按最后检测</option>
+                </select>
+                <select v-model="filters.proxySortOrder">
+                  <option value="desc">降序</option>
+                  <option value="asc">升序</option>
+                </select>
                 <button @click="queryProxies">查询</button>
               </div>
             </div>
@@ -98,7 +121,7 @@
                 </thead>
                 <tbody>
                   <tr v-if="!proxies.length"><td colspan="8">暂无数据</td></tr>
-                  <tr v-for="p in proxies" :key="p.id">
+                  <tr v-for="p in sortedProxies" :key="p.id">
                     <td>{{ p.id }}</td>
                     <td>{{ p.proxy_url }}</td>
                     <td>{{ p.country_code || '-' }}</td>
