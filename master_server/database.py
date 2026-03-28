@@ -964,15 +964,10 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
     placeholders = ",".join(["?"] * len(proxy_ids))
     rows = conn.execute(
         f"""
-        SELECT r1.proxy_id, r1.node_name, r1.worker_id, r1.success, r1.latency_ms, r1.response_status, r1.error, r1.country_code, r1.checked_at
-        FROM check_results r1
-        JOIN (
-            SELECT proxy_id, node_name, worker_id, MAX(id) AS max_id
-            FROM check_results
-            WHERE proxy_id IN ({placeholders})
-            GROUP BY proxy_id, node_name, worker_id
-        ) latest ON latest.max_id = r1.id
-        ORDER BY r1.proxy_id ASC, r1.node_name ASC, r1.worker_id ASC
+        SELECT proxy_id, node_name, worker_id, success, latency_ms, response_status, error, country_code, checked_at, id
+        FROM check_results
+        WHERE proxy_id IN ({placeholders})
+        ORDER BY proxy_id ASC, checked_at DESC, id DESC
         """,
         proxy_ids,
     ).fetchall()
@@ -980,6 +975,8 @@ def _list_latest_node_results(conn: sqlite3.Connection, proxy_ids: list[int]) ->
     grouped: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         proxy_id = row["proxy_id"]
+        if len(grouped.get(proxy_id, [])) >= 5:
+            continue
         grouped.setdefault(proxy_id, []).append(
             {
                 "node_name": row["node_name"],
