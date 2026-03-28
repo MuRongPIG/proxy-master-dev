@@ -116,7 +116,7 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 ## Run Master Server (Python)
 
 ```bash
-NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
 Master reads token from environment variable `NODE_TOKEN`.
@@ -131,6 +131,8 @@ Important options:
 - `--pool-export-interval-seconds`: export interval, default `300`, minimum `30`.
 - `--excellent-success-rate`: success threshold for `excellent`, default `0.8` (range `0.5` to `1.0`).
 - `--excellent-min-checks`: min checks for `excellent`, default `3` (range `1` to `20`).
+- `--task-retention-days`: retention days for terminal tasks (`done/failed`), default `14`; `0` disables cleanup.
+- `--task-cleanup-interval-seconds`: cleanup interval for terminal tasks, default `600`, minimum `30`.
 - `--log-dir`: log directory.
 - `--log-level`: log level, default `INFO`.
 - `--log-retention-days`: log retention days, default `14`.
@@ -149,6 +151,7 @@ Background jobs (every 30 seconds):
 - Clean long-term unavailable proxies.
 - Refresh URLs at configured intervals.
 - Run global deduplication and merge duplicates.
+- Clean old terminal tasks (`done/failed`) by retention policy.
 - Export alive proxies (`status=alive`) by protocol under output directories.
 
 ## Run Worker Node (Python)
@@ -177,7 +180,7 @@ Notes:
 ## Unified Entry Point (Optional)
 
 ```bash
-NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 
 python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```

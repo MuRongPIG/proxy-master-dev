@@ -58,6 +58,8 @@ def _run_master(
 	pool_export_interval_seconds: int,
 	excellent_success_rate: float,
 	excellent_min_checks: int,
+	task_retention_days: int,
+	task_cleanup_interval_seconds: int,
 	log_dir: str,
 	log_level: str,
 	log_retention_days: int,
@@ -83,6 +85,8 @@ def _run_master(
 	os.environ["MASTER_POOL_EXPORT_INTERVAL_SECONDS"] = str(pool_export_interval_seconds)
 	os.environ["MASTER_EXCELLENT_SUCCESS_RATE"] = str(excellent_success_rate)
 	os.environ["MASTER_EXCELLENT_MIN_CHECKS"] = str(excellent_min_checks)
+	os.environ["MASTER_TASK_RETENTION_DAYS"] = str(task_retention_days)
+	os.environ["MASTER_TASK_CLEANUP_INTERVAL_SECONDS"] = str(task_cleanup_interval_seconds)
 	os.environ["MASTER_LOG_DIR"] = resolved_log_dir
 	os.environ["MASTER_LOG_LEVEL"] = log_level
 	os.environ["MASTER_LOG_RETENTION_DAYS"] = str(max(1, log_retention_days))
@@ -169,6 +173,8 @@ def main() -> None:
 	master_parser.add_argument("--pool-export-interval-seconds", type=int, default=300)
 	master_parser.add_argument("--excellent-success-rate", type=float, default=0.8)
 	master_parser.add_argument("--excellent-min-checks", type=int, default=3)
+	master_parser.add_argument("--task-retention-days", type=int, default=14)
+	master_parser.add_argument("--task-cleanup-interval-seconds", type=int, default=600)
 	master_parser.add_argument("--log-dir", default="")
 	master_parser.add_argument("--log-level", default="INFO")
 	master_parser.add_argument("--log-retention-days", type=int, default=14)
@@ -203,6 +209,8 @@ def main() -> None:
 			pool_export_interval_seconds=args.pool_export_interval_seconds,
 			excellent_success_rate=args.excellent_success_rate,
 			excellent_min_checks=args.excellent_min_checks,
+			task_retention_days=args.task_retention_days,
+			task_cleanup_interval_seconds=args.task_cleanup_interval_seconds,
 			log_dir=args.log_dir,
 			log_level=args.log_level,
 			log_retention_days=args.log_retention_days,

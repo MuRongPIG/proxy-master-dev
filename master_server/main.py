@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("--pool-export-interval-seconds", type=int, default=300, help="代理池导出间隔秒数，最小 30")
     parser.add_argument("--excellent-success-rate", type=float, default=0.8, help="excellent 判定成功率阈值，默认 0.8")
     parser.add_argument("--excellent-min-checks", type=int, default=3, help="excellent 判定最小检测次数，默认 3")
+    parser.add_argument("--task-retention-days", type=int, default=14, help="历史任务保留天数；0 表示不自动清理")
+    parser.add_argument("--task-cleanup-interval-seconds", type=int, default=600, help="历史任务清理间隔秒数，最小 30")
     parser.add_argument("--log-dir", default="", help="日志目录；默认 db-path 同目录下 logs/master")
     parser.add_argument("--log-level", default="INFO", help="日志级别：DEBUG/INFO/WARNING/ERROR")
     parser.add_argument("--log-retention-days", type=int, default=14, help="日志保留天数，默认 14")
@@ -58,6 +60,8 @@ def main() -> None:
     os.environ["MASTER_POOL_EXPORT_INTERVAL_SECONDS"] = str(args.pool_export_interval_seconds)
     os.environ["MASTER_EXCELLENT_SUCCESS_RATE"] = str(args.excellent_success_rate)
     os.environ["MASTER_EXCELLENT_MIN_CHECKS"] = str(args.excellent_min_checks)
+    os.environ["MASTER_TASK_RETENTION_DAYS"] = str(args.task_retention_days)
+    os.environ["MASTER_TASK_CLEANUP_INTERVAL_SECONDS"] = str(args.task_cleanup_interval_seconds)
     os.environ["MASTER_LOG_DIR"] = resolved_log_dir
     os.environ["MASTER_LOG_LEVEL"] = args.log_level
     os.environ["MASTER_LOG_RETENTION_DAYS"] = str(max(1, args.log_retention_days))

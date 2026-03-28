@@ -144,6 +144,23 @@ def _pool_export_interval_seconds() -> int:
         return 300
 
 
+def _task_retention_days() -> int:
+    raw = os.getenv("MASTER_TASK_RETENTION_DAYS", "14")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 14
+    return max(0, min(3650, value))
+
+
+def _task_cleanup_interval_seconds() -> int:
+    raw = os.getenv("MASTER_TASK_CLEANUP_INTERVAL_SECONDS", "600")
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 600
+
+
 def _pool_export_dir() -> str:
     export_dir = os.getenv("MASTER_POOL_EXPORT_DIR", "").strip()
     if export_dir:
@@ -261,8 +278,11 @@ def _background_task_loop() -> None:
     """后台循环：定时执行任务分配、代理池评级、过期代理清理。"""
     last_url_refresh = 0.0
     last_pool_export = 0.0
+    last_task_cleanup = 0.0
     url_refresh_interval = _url_refresh_interval_seconds()
     pool_export_interval = _pool_export_interval_seconds()
+    task_cleanup_interval = _task_cleanup_interval_seconds()
+    task_retention_days = _task_retention_days()
     while True:
         try:
             time.sleep(30)  # 每 30 秒执行一次
@@ -276,6 +296,11 @@ def _background_task_loop() -> None:
             database.cleanup_dead_proxies(days_inactive=1)
             database.cleanup_failed_proxies(fail_threshold=5)
             database.deduplicate_proxy_pool()
+            if task_retention_days > 0 and now - last_task_cleanup >= task_cleanup_interval:
+                deleted_tasks = database.cleanup_finished_tasks(retention_days=task_retention_days)
+                if deleted_tasks > 0:
+                    logger.info("已清理过期历史任务: %s 条", deleted_tasks)
+                last_task_cleanup = now
             if now - last_pool_export >= pool_export_interval:
                 _export_pool_once()
                 last_pool_export = now

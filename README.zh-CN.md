@@ -100,7 +100,7 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 ### 主服务器
 
 ```bash
-NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt,D:/data/extra.txt" --bootstrap-proxy-urls "https://example.com/proxy1.txt,https://example.com/proxy2.txt" --bootstrap-proxy-url-file "D:/data/proxy_urls.txt" --url-refresh-interval-seconds 300 --bootstrap-max-retries 2 --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 ```
 
 主服务器从环境变量 `NODE_TOKEN` 读取令牌。
@@ -115,6 +115,8 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 - `--pool-export-interval-seconds`：代理池导出间隔，默认 300 秒，最小 30 秒。
 - `--excellent-success-rate`：excellent 判定成功率阈值，默认 0.8（范围限制 0.5~1.0）。
 - `--excellent-min-checks`：excellent 判定最小检测次数，默认 3（范围限制 1~20）。
+- `--task-retention-days`：终态任务（done/failed）保留天数，默认 14；设置为 0 表示不自动清理。
+- `--task-cleanup-interval-seconds`：终态任务清理间隔秒数，默认 600，最小 30。
 - `--log-dir`：日志目录；默认 `db-path` 同目录下 `logs/master`。
 - `--log-level`：日志级别，默认 `INFO`。
 - `--log-retention-days`：日志保留天数，默认 14；超过保留周期的历史日志会自动清理。
@@ -133,6 +135,7 @@ NODE_TOKEN=your-token python -m master_server.main --host 0.0.0.0 --port 62071 -
 - 清理长期不可用代理
 - 按配置间隔从 URL 自动刷新代理
 - 执行全池去重（规范化并合并重复代理）
+- 按保留策略自动清理过期终态任务（done/failed）
 - 按配置间隔将可用代理（status=alive）导出到 `output/` 目录，并按协议分子目录
 
 默认导出结构（以 `--pool-export-dir` 为目录）：
@@ -183,7 +186,7 @@ python -m worker_node.main --master-url http://127.0.0.1:62071 --worker-id worke
 ### 统一入口（可选）
 
 ```bash
-NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
+NODE_TOKEN=your-token python main.py master --host 0.0.0.0 --port 62071 --db-path proxy_checker.db --bootstrap-proxy-files "D:/data/proxies.txt" --bootstrap-proxy-urls "https://example.com/proxy.txt" --pool-export-dir "D:/data/pool_exports" --pool-export-interval-seconds 300 --excellent-success-rate 0.8 --excellent-min-checks 3 --task-retention-days 14 --task-cleanup-interval-seconds 600 --log-dir "D:/data/logs/master" --log-level INFO --log-retention-days 14
 python main.py worker --master-url http://127.0.0.1:62071 --worker-id worker --worker-count 4 --node-token your-token --target-url https://npmjs.org/cdn-cgi/trace --log-dir "D:/data/logs/worker" --log-level INFO --log-retention-days 14
 ```
 

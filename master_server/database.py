@@ -91,6 +91,42 @@ def _excellent_min_checks() -> int:
     return max(1, min(20, value))
 
 
+def _pending_task_cap() -> int:
+    raw = os.getenv("MASTER_PENDING_TASK_CAP", "5000")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 5000
+    return max(100, value)
+
+
+def _new_tasks_per_cycle_cap() -> int:
+    raw = os.getenv("MASTER_NEW_TASKS_PER_CYCLE_CAP", "600")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 600
+    return max(30, value)
+
+
+def _pending_rebalance_batch_size() -> int:
+    raw = os.getenv("MASTER_PENDING_REBALANCE_BATCH_SIZE", "1200")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1200
+    return max(100, value)
+
+
+def _finished_task_cleanup_batch_size() -> int:
+    raw = os.getenv("MASTER_FINISHED_TASK_CLEANUP_BATCH_SIZE", "10000")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 10000
+    return max(200, value)
+
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -175,6 +211,7 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_tasks_status_id ON tasks(status, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_status_finished_at ON tasks(status, finished_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_proxy_id ON tasks(proxy_id);
             CREATE INDEX IF NOT EXISTS idx_results_proxy_node_time ON check_results(proxy_id, node_name, checked_at DESC);
             CREATE INDEX IF NOT EXISTS idx_proxies_pool_tier ON proxies(pool_tier);
@@ -782,6 +819,44 @@ def cleanup_failed_proxies(fail_threshold: int = 5) -> int:
         conn.close()
 
 
+def cleanup_finished_tasks(retention_days: int = 14) -> int:
+    """清理保留期外的已完成任务（done/failed）及其检测结果。"""
+    if retention_days < 1:
+        return 0
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    batch_size = _finished_task_cleanup_batch_size()
+    conn = _get_conn()
+    try:
+        with _DB_LOCK:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM tasks
+                WHERE status IN ('done', 'failed')
+                  AND finished_at IS NOT NULL
+                  AND finished_at < ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (cutoff, batch_size),
+            ).fetchall()
+
+            if not rows:
+                conn.commit()
+                return 0
+
+            task_ids = [row["id"] for row in rows]
+            placeholders = ",".join(["?"] * len(task_ids))
+            conn.execute(f"DELETE FROM check_results WHERE task_id IN ({placeholders})", task_ids)
+            deleted = conn.execute(f"DELETE FROM tasks WHERE id IN ({placeholders})", task_ids).rowcount
+            conn.commit()
+            return deleted
+    finally:
+        conn.close()
+
+
 def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
     """每 6 小时为每个代理随机分配到 3 个不同地区的在线 worker。"""
     active_nodes = list_active_nodes()
@@ -802,15 +877,66 @@ def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
     six_hours_ago = (now_dt - timedelta(hours=6)).isoformat()
+    heartbeat_cutoff = (now_dt - timedelta(seconds=60)).isoformat()
     candidate_regions = list(nodes_by_region.keys())
+    pending_cap = _pending_task_cap()
+    per_cycle_cap = _new_tasks_per_cycle_cap()
+    rebalance_batch_size = _pending_rebalance_batch_size()
 
     conn = _get_conn()
     try:
         with _DB_LOCK:
+            # 先重平衡一批 pending：包括未定向任务和分配给离线 worker 的任务。
+            stale_pending_rows = conn.execute(
+                """
+                SELECT t.id, t.assigned_to
+                FROM tasks t
+                WHERE t.status = 'pending'
+                  AND (
+                    t.assigned_to IS NULL
+                    OR t.assigned_worker_id IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1 FROM node_workers nw
+                      WHERE nw.node_name = t.assigned_to
+                        AND nw.worker_id = t.assigned_worker_id
+                        AND nw.active = 1
+                        AND nw.last_heartbeat > ?
+                    )
+                  )
+                ORDER BY t.id ASC
+                LIMIT ?
+                """,
+                (heartbeat_cutoff, rebalance_batch_size),
+            ).fetchall()
+
+            for row in stale_pending_rows:
+                preferred_region = _extract_region_from_node_name(str(row["assigned_to"] or ""))
+                candidates = nodes_by_region.get(preferred_region) if preferred_region else None
+                if not candidates:
+                    candidates = active_nodes
+                selected_node = random.choice(candidates)
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET assigned_to = ?, assigned_worker_id = ?
+                    WHERE id = ?
+                    """,
+                    (selected_node["node_name"], selected_node["worker_id"], row["id"]),
+                )
+
+            pending_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM tasks WHERE status = 'pending'"
+            ).fetchone()["count"]
+
+            if pending_count >= pending_cap:
+                conn.commit()
+                return
+
             all_proxies = conn.execute(
                 "SELECT id, last_checked_at FROM proxies ORDER BY RANDOM()"
             ).fetchall()
 
+            generated = 0
             for proxy_row in all_proxies:
                 proxy_id = proxy_row["id"]
 
@@ -850,6 +976,12 @@ def distribute_detection_tasks(max_concurrent_per_node: int = 5) -> None:
                             now,
                         ),
                     )
+                    generated += 1
+                    if generated >= per_cycle_cap:
+                        break
+
+                if generated >= per_cycle_cap:
+                    break
 
             conn.commit()
     finally:
