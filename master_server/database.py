@@ -661,16 +661,6 @@ def submit_result(
                 (task_status, now, task_row["id"]),
             )
 
-            proxy_status = "alive" if success else "dead"
-            conn.execute(
-                """
-                UPDATE proxies
-                SET status = ?, country_code = COALESCE(?, country_code), latency_ms = ?, error = ?, last_checked_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (proxy_status, normalized_country, latency_ms, error, now, now, task_row["proxy_id"]),
-            )
-
             conn.execute(
                 """
                 INSERT INTO check_results (
@@ -689,6 +679,21 @@ def submit_result(
                     normalized_country,
                     now,
                 ),
+            )
+
+            success_count = conn.execute(
+                "SELECT COALESCE(SUM(success), 0) AS success_count FROM check_results WHERE proxy_id = ?",
+                (task_row["proxy_id"],),
+            ).fetchone()["success_count"]
+            proxy_status = "alive" if int(success_count or 0) >= 2 else "dead"
+
+            conn.execute(
+                """
+                UPDATE proxies
+                SET status = ?, country_code = COALESCE(?, country_code), latency_ms = ?, error = ?, last_checked_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (proxy_status, normalized_country, latency_ms, error, now, now, task_row["proxy_id"]),
             )
 
             if not success and task_row["attempt"] < task_row["max_retries"]:

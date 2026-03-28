@@ -131,7 +131,7 @@
                     <td>{{ p.last_checked_at || '-' }}</td>
                     <td>
                       <div v-if="!p.node_results || !p.node_results.length">-</div>
-                      <div v-for="r in p.node_results" :key="`${r.node_name}-${r.worker_id}`">
+                      <div v-for="(r, idx) in (p.node_results || []).slice(0, 5)" :key="`${p.id}-${r.node_name}-${r.worker_id}-${r.checked_at || idx}`">
                         {{ r.node_name }}/{{ r.worker_id }} | {{ r.success ? 'ok' : 'fail' }} | {{ r.latency_ms ?? '-' }}ms | {{ r.country_code || '-' }}
                       </div>
                     </td>
