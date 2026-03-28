@@ -798,6 +798,22 @@ def submit_result(
                 else:
                     new_phase = "primary_done"
 
+                batch_country_code = None
+                if int(success_count or 0) >= 1:
+                    batch_country_row = conn.execute(
+                        """
+                        SELECT country_code FROM check_results
+                        WHERE task_id IN (
+                            SELECT id FROM tasks WHERE batch_id = ? AND status = 'done'
+                        ) AND country_code IS NOT NULL
+                        ORDER BY checked_at DESC
+                        LIMIT 1
+                        """,
+                        (batch_id,),
+                    ).fetchone()
+                    if batch_country_row:
+                        batch_country_code = batch_country_row["country_code"]
+
                 conn.execute(
                     """
                     UPDATE proxies
@@ -815,7 +831,7 @@ def submit_result(
                         new_status,
                         new_tier,
                         new_phase,
-                        normalized_country,
+                        batch_country_code,
                         latency_ms,
                         error,
                         now,
