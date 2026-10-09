@@ -60,3 +60,4 @@ https://spys.me/proxy.txt
 https://spys.me/socks.txt
 https://sunny9577.github.io/proxy-scraper/generated/http_proxies.txt
 https://www.socks-proxy.net/
+https://rcloak.com/api/proxies/raw?protocol=all
